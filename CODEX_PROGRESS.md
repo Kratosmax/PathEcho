@@ -19,12 +19,13 @@ dotnet --version
 
 - 最后核验：2026-08-22，Asia/Shanghai。
 - 版本：`0.2.1`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；本轮校准基线为 `0f7dc8c236ad0cd8fe989d651bf6f7e249333b2c`，与 `origin/main` 一致；正式 `v0.2.0` 标签指向 `7a4749aca3ecd182f64c8a118dbf57088f99dd47`。
+- 分支：`main`；`0.2.1` 发布代码基线为 `f3506aff4f7271495f160b7fd6e859a17949b4e0`，正式 `v0.2.1` 标签固定指向该提交；发布核验文档提交位于标签之后，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
 - `v0.2.0` 已正式发布：标签指向 `7a4749aca3ecd182f64c8a118dbf57088f99dd47`，GitHub Actions Run `32564746250` 成功，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.2.0`。
+- `v0.2.1` 已正式发布：标签指向 `f3506aff4f7271495f160b7fd6e859a17949b4e0`，GitHub Actions Run `32569018960` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.2.1`，GitHub latest API 已指向该版本。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
@@ -49,7 +50,9 @@ dotnet --version
 
 ## 当前待办
 
-- `0.2.1` 双击闪退与运行时一致性修复已获提交、推送和发布授权；当前待完成完整 Release 构建、签名云端发布、上一正式版兼容检查和线上资产核验。正式 `v0.2.0` 不得覆盖。
+- `0.2.1` 双击闪退与运行时一致性修复、提交、推送、云端构建、签名发布和线上资产核验均已完成，当前没有已授权但未完成的代码任务。
+- 本机直连 `releases/latest/download/update-lite.json` 与 `update-full.json` 在 15 秒连接阶段超时，因此没有独立证明网页 latest 重定向链；GitHub latest API 已指向 `v0.2.1`，且通过 GitHub CLI 下载的该 Release 清单与 API digest 一致。后续在直连 GitHub 正常的网络环境补测即可，不得把本机超时描述成服务端 404。
+- 上一正式版 `v0.2.0` 原始 Lite 客户端已接受 `0.2.1` Lite 候选包；旧 Full 原包因本机直连过慢未完成下载，因此旧 Full 完整自动升级链仍未验证。该边界不影响已完成的 Full 清单验签、资产 digest、SHA256 和包结构交叉核验。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。发布工作流已按官方最新稳定版本升级到 `checkout@v7` 与 `setup-dotnet@v6`。
 
 ## 关键入口
@@ -80,6 +83,10 @@ dotnet --version
 - `0.2.1` 四包本地构建已生成 Lite/Full ZIP 和 Setup；两个 ZIP 均通过候选包内更新器的版本、通道、哈希和结构预检，两个安装器由 Inno Setup 6.7.3 编译成功。一次性测试密钥不匹配客户端内置正式公钥，因此本地发布脚本按安全设计在清单自验阶段拒绝继续；正式清单只能由 GitHub Actions Secret 生成。
 - 上一正式版 `v0.2.0` 原始 Lite ZIP（448783 字节，SHA-256 `F8267BD06DCF07D0C689ED8449A2D939E04E4FFD4EC71AD6C91F8356F708F292`）中的旧更新器已接受 `0.2.1` Lite 候选包。旧 Full 原包直连下载超过约 4 分钟且未产生文件，已中止；发布后需用线上签名清单、资产 digest、SHA256 文件和 Full 包结构交叉核验，不得宣称旧 Full 完整升级链已通过。
 - `0.2.1` 920×620 最小窗截图为 `temp/ui-check/release-0.2.1-sync-920x620.png`，界面版本显示、选中态、长路径布局和等待式退出均正常，进程退出码为 0。
+- `v0.2.1` GitHub Actions Run `32569018960` 已完成且结论为 success，Run 的 `head_sha` 与标签提交 `f3506aff4f7271495f160b7fd6e859a17949b4e0` 一致。
+- `v0.2.1` Release 非草稿、非预发布，共 8 个 uploaded 资产：四种安装/便携包、三份更新清单和 `SHA256SUMS.txt`；Release 正文只包含 `0.2.1` 变更。
+- `SHA256SUMS.txt` 包含 7 条记录并与 GitHub Release API digest 一致；`update.json` 与 `update-lite.json` 均为 2707 字节且 SHA-256 同为 `5C95518378D0A6532B81D2F202B14A4A94D3532F8791501F67CBAC35358C9E8B`，`update-full.json` 为 2704 字节且 SHA-256 为 `379F436CBA6C9364B4D6030BCE388FB777E70579FAC60B4CC3D140522E10F9C1`。
+- 正式 Lite 清单指向 454249 字节、SHA-256 `72597DFF1D7592B391C27CBBB216F8A9AE2B8AAEF5E91BD85784F04239FECDA7` 的 `PathEcho-0.2.1-Lite.zip`；正式 Full 清单指向 99719260 字节、SHA-256 `79485BC86B1583AF6DC9C0220F039F20694425221C3AD63340ED4282CBB799D2` 的 `PathEcho-0.2.1-Full.zip`。两份线上清单均已使用客户端内置公钥实际验签通过。
 
 ~~~powershell
 dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal
