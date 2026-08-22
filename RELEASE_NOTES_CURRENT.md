@@ -1,4 +1,4 @@
-# PathEcho 0.1.0
+# PathEcho 0.1.1
 
 PathEcho 的第一个公开版本，提供 Windows 本机目录同步与游戏存档版本备份。
 

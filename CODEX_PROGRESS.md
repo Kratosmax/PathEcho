@@ -18,13 +18,13 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-22，Asia/Shanghai。
-- 版本：`0.1.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 版本：`0.1.1`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
 - 分支：`main`；初始实现提交为 `39e08ec26bca632d280baf5f50e8cf25d6a24622`。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 已核验与初始实现提交一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
-- 标签、Actions 和 Release 尚未创建或在线核验。
+- `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
-- 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret、推送 `v0.1.0` 标签并发布首版。
+- 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
 
 ## 已实现
@@ -41,7 +41,7 @@ dotnet --version
 
 ## 当前待办
 
-1. 创建并推送 `v0.1.0`，等待 Release Actions 成功。
+1. 验证 CI 的 ISCC 路径修复并创建补丁标签 `v0.1.1`，等待 Release Actions 成功。
 2. 核验线上 8 个资产、清单验签、SHA256、latest 路由和下载包。
 3. 发布完成后把标签、Actions、Release 和线上核验结果写回本文，再提交推送收尾文档。
 
@@ -71,12 +71,14 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ~~~
 
 - Release 构建 0 警告、0 错误；SmokeTests 13/13 通过。
+- `0.1.1` 补丁改动后再次完成 Release 构建 0 警告、0 错误和 SmokeTests 13/13。
 - Full/Lite 最终 ZIP 均通过对应更新器 `--verify-only` 的哈希、版本、通道和结构预检。
 - 本机未安装全局 .NET 8 Desktop Runtime，Lite Setup 正确阻止安装并给出依赖提示。
 - Full Setup 完成静默安装、签名清单与包二次验证、外部更新器替换、预览重启截图、卸载器保留和静默卸载；三个进程退出码均为 0，测试安装目录与卸载登记已清理。
 - UI 已核验设置页、同步页、常用尺寸、920×620 最小尺寸和强制不透明回退；证据位于忽略提交的 `temp/ui` 与 `temp/e2e`。
+- `0.1.1` 本地 Lite 预览包为 `temp/preview/PathEcho-0.1.1-Lite.zip`，390235 字节，SHA-256 `0F05CDE5C4C542FD9C16BE2F278AC18C5CF34471AE590491EDBB3B3D0AD075BF`；更新器预检与真实设置页截图通过。
 
-当前本地候选资产：
+以下是失败标签前已完整验证的 `0.1.0` 本地候选资产，仅作为更新链回归证据，不得作为 `0.1.1` 线上哈希：
 
 | 资产 | 字节 | SHA-256 |
 |---|---:|---|

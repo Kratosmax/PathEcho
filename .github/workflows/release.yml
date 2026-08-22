@@ -28,9 +28,10 @@ jobs:
           PATHECHO_UPDATE_PRIVATE_KEY: ${{ secrets.PATHECHO_UPDATE_PRIVATE_KEY }}
         run: |
           $key = Join-Path $env:RUNNER_TEMP "pathecho-update-private.pem"
+          $iscc = (Get-Command ISCC.exe -ErrorAction Stop).Source
           try {
             [IO.File]::WriteAllText($key, $env:PATHECHO_UPDATE_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
-            .\build\Build-Release.ps1 -PrivateKeyPath $key -ExpectedTag $env:GITHUB_REF_NAME
+            .\build\Build-Release.ps1 -PrivateKeyPath $key -IsccPath $iscc -ExpectedTag $env:GITHUB_REF_NAME
           } finally {
             Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
           }
