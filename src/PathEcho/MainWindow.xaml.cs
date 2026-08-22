@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 using PathEcho.Core.Backup;
@@ -22,6 +24,7 @@ namespace PathEcho;
 public partial class MainWindow : Window
 {
     private readonly PathEchoRuntime _runtime;
+    private readonly ICollectionView _syncTaskView;
 
     public ObservableCollection<UpdateRouteRow> UpdateRoutes { get; } = new();
 
@@ -36,6 +39,11 @@ public partial class MainWindow : Window
         SidebarVersionText.Text = $"v{currentVersion}";
         SettingsVersionText.Text = $"当前版本 {currentVersion}";
         DataContext = runtime;
+        _syncTaskView = CollectionViewSource.GetDefaultView(runtime.SyncTasks);
+        _syncTaskView.Filter = MatchesSyncFilter;
+        SyncGrid.ItemsSource = _syncTaskView;
+        SyncStatusFilter.ItemsSource = new[] { "全部状态", "可用", "目录异常", "同步中", "失败" };
+        SyncStatusFilter.SelectedIndex = 0;
         StartupCheck.IsChecked = runtime.Configuration.StartWithWindows;
         MinimizedCheck.IsChecked = runtime.Configuration.StartMinimized;
         UpdateCheck.IsChecked = runtime.Configuration.CheckForUpdates;
@@ -62,12 +70,26 @@ public partial class MainWindow : Window
         UpdateEmptyStates();
     }
 
-    private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e) => UpdateEmptyStates();
+    private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        _syncTaskView.Refresh();
+        UpdateEmptyStates();
+    }
 
     private void UpdateEmptyStates()
     {
-        SyncEmpty.Visibility = _runtime.SyncTasks.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        SyncGrid.Visibility = _runtime.SyncTasks.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        var syncCount = _runtime.SyncTasks.Count;
+        var visibleSyncCount = _syncTaskView.Cast<object>().Count();
+        var selectedCount = SyncGrid.SelectedItem is SyncTaskRow ? 1 : 0;
+        SyncSummaryText.Text = selectedCount > 0
+            ? $"{syncCount} 个任务 · 已选中 {selectedCount} 个"
+            : visibleSyncCount == syncCount
+                ? $"{syncCount} 个任务"
+                : $"显示 {visibleSyncCount} / {syncCount} 个任务";
+        SyncEmpty.Visibility = syncCount == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SyncNoResults.Visibility = syncCount > 0 && visibleSyncCount == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SyncGrid.Visibility = visibleSyncCount == 0 ? Visibility.Collapsed : Visibility.Visible;
+        RunAllSyncButton.IsEnabled = syncCount > 0;
         GameEmpty.Visibility = _runtime.GameProfiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         GameGrid.Visibility = _runtime.GameProfiles.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         HistoryEmpty.Visibility = _runtime.History.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -81,6 +103,11 @@ public partial class MainWindow : Window
     }
 
     public void SelectPreviewView(string selected) => SelectView(selected);
+
+    public void SelectFirstSyncTaskForPreview()
+    {
+        SyncGrid.SelectedIndex = SyncGrid.Items.Count > 0 ? 0 : -1;
+    }
 
     private void SelectView(string selected)
     {
@@ -134,11 +161,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        await RunSyncAsync(row);
+    }
+
+    private async Task RunSyncAsync(SyncTaskRow row)
+    {
         await RunUiActionAsync($"正在同步 {row.Name}", async () =>
         {
             await _runtime.RunSyncNowAsync(row.Definition.Id);
             StatusText.Text = $"{row.Name} 同步完成";
         });
+        RefreshSyncFilter();
     }
 
     private async void OnRunAllSync(object sender, RoutedEventArgs e)
@@ -185,9 +218,7 @@ public partial class MainWindow : Window
         }
 
         var files = System.IO.Path.Combine(row.SnapshotDirectory, "files");
-        var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
-        startInfo.ArgumentList.Add(files);
-        Process.Start(startInfo);
+        OpenDirectory(files);
     }
 
     private async void OnRestoreRow(object sender, RoutedEventArgs e)
@@ -272,6 +303,12 @@ public partial class MainWindow : Window
 
     private void OnCheckForUpdates(object sender, RoutedEventArgs e)
     {
+        if (_runtime.IsPreviewMode)
+        {
+            ShowError("预览模式不会访问更新网络。");
+            return;
+        }
+
         try
         {
             new UpdateWindow(this, BuildUpdateNetworkOptions()).ShowDialog();
@@ -354,6 +391,12 @@ public partial class MainWindow : Window
 
     private async void OnDiscoverBackups(object sender, RoutedEventArgs e)
     {
+        if (_runtime.IsPreviewMode)
+        {
+            ShowError("预览模式不会导入真实备份。");
+            return;
+        }
+
         var dialog = new OpenFolderDialog { Title = "选择需要扫描的备份目录" };
         if (dialog.ShowDialog() != true)
         {
@@ -391,7 +434,174 @@ public partial class MainWindow : Window
 
     private void OnSyncSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        DeleteSyncButton.IsEnabled = SyncGrid.SelectedItem is SyncTaskRow;
+        var visibility = SyncGrid.SelectedItem is SyncTaskRow ? Visibility.Visible : Visibility.Collapsed;
+        EditSyncButton.Visibility = visibility;
+        DeleteSyncButton.Visibility = visibility;
+        UpdateEmptyStates();
+    }
+
+    private void OnSyncFilterChanged(object sender, EventArgs e)
+    {
+        if (!IsInitialized || _syncTaskView is null)
+        {
+            return;
+        }
+
+        RefreshSyncFilter();
+    }
+
+    private bool MatchesSyncFilter(object item)
+    {
+        if (item is not SyncTaskRow row)
+        {
+            return false;
+        }
+
+        var query = SyncSearchBox?.Text.Trim() ?? string.Empty;
+        var matchesQuery = query.Length == 0 || new[]
+        {
+            row.Name, row.LeftPath, row.RightPath, row.Mode, row.Deletion, row.Status,
+        }.Any(value => value.Contains(query, StringComparison.CurrentCultureIgnoreCase));
+        if (!matchesQuery)
+        {
+            return false;
+        }
+
+        return (SyncStatusFilter?.SelectedItem as string) switch
+        {
+            "可用" => !row.HasDirectoryIssue,
+            "目录异常" => row.HasDirectoryIssue,
+            "同步中" => row.Status.Contains("正在", StringComparison.Ordinal),
+            "失败" => row.Status.Contains("失败", StringComparison.Ordinal),
+            _ => true,
+        };
+    }
+
+    private void RefreshSyncFilter()
+    {
+        SyncSearchHint.Visibility = string.IsNullOrEmpty(SyncSearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+        _syncTaskView.Refresh();
+        UpdateEmptyStates();
+    }
+
+    private void OnClearSyncFilter(object sender, RoutedEventArgs e)
+    {
+        SyncSearchBox.Clear();
+        SyncStatusFilter.SelectedIndex = 0;
+        SyncSearchBox.Focus();
+    }
+
+    private void OnSyncRowDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is null && SyncGrid.SelectedItem is SyncTaskRow row)
+        {
+            EditSync(row);
+        }
+    }
+
+    private void OnSyncRowRightClick(object sender, MouseButtonEventArgs e)
+    {
+        if (FindAncestor<DataGridRow>(e.OriginalSource as DependencyObject) is { } row)
+        {
+            row.IsSelected = true;
+            row.Focus();
+        }
+    }
+
+    private void OnEditSync(object sender, RoutedEventArgs e)
+    {
+        if (SyncGrid.SelectedItem is SyncTaskRow row)
+        {
+            EditSync(row);
+        }
+    }
+
+    private void OnEditSyncMenu(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SyncTaskRow row)
+        {
+            EditSync(row);
+        }
+    }
+
+    private async void EditSync(SyncTaskRow row)
+    {
+        var dialog = new SyncTaskEditorWindow(row.Definition) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is null)
+        {
+            return;
+        }
+
+        await RunUiActionAsync("正在保存同步任务", () => _runtime.UpdateSyncTaskAsync(dialog.Result));
+        StatusText.Text = $"{dialog.Result.Name} 已更新";
+        RefreshSyncFilter();
+    }
+
+    private async void OnDuplicateSyncMenu(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not SyncTaskRow row)
+        {
+            return;
+        }
+
+        var dialog = new SyncTaskEditorWindow(row.Definition, duplicate: true) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is null)
+        {
+            return;
+        }
+
+        await RunUiActionAsync("正在创建任务副本", () => _runtime.AddSyncTaskAsync(dialog.Result));
+        StatusText.Text = $"{dialog.Result.Name} 已创建";
+    }
+
+    private async void OnRunSyncMenu(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SyncTaskRow row)
+        {
+            await RunSyncAsync(row);
+        }
+    }
+
+    private void OnOpenLeftDirectory(object sender, RoutedEventArgs e) =>
+        OpenTaskDirectory((sender as FrameworkElement)?.DataContext as SyncTaskRow, useLeftPath: true);
+
+    private void OnOpenRightDirectory(object sender, RoutedEventArgs e) =>
+        OpenTaskDirectory((sender as FrameworkElement)?.DataContext as SyncTaskRow, useLeftPath: false);
+
+    private void OpenTaskDirectory(SyncTaskRow? row, bool useLeftPath)
+    {
+        if (row is null)
+        {
+            return;
+        }
+
+        var path = useLeftPath ? row.LeftPath : row.RightPath;
+        if (!OpenDirectory(path))
+        {
+            RefreshSyncFilter();
+        }
+    }
+
+    private bool OpenDirectory(string path)
+    {
+        if (!Directory.Exists(path))
+        {
+            ShowError($"目录不存在或当前不可访问：\n\n{path}");
+            return false;
+        }
+
+        var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = false };
+        startInfo.ArgumentList.Add(path);
+        Process.Start(startInfo);
+        return true;
+    }
+
+    private async void OnDeleteSyncMenu(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SyncTaskRow row)
+        {
+            await DeleteSyncAsync(row);
+        }
     }
 
     private void OnGameSelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -406,6 +616,11 @@ public partial class MainWindow : Window
             return;
         }
 
+        await DeleteSyncAsync(row);
+    }
+
+    private async Task DeleteSyncAsync(SyncTaskRow row)
+    {
         var prompt = new PromptWindow(this, "删除同步任务", $"删除同步任务“{row.Name}”？\n\n已同步的文件不会被删除。", "删除", "取消", primaryIsDanger: true);
         prompt.ShowDialog();
         if (prompt.Choice != PromptChoice.Primary)
@@ -415,6 +630,21 @@ public partial class MainWindow : Window
 
         await RunUiActionAsync("正在删除同步任务", () => _runtime.RemoveSyncTaskAsync(row.Definition.Id));
         StatusText.Text = "同步任务已删除";
+    }
+
+    private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
+    {
+        while (current is not null)
+        {
+            if (current is T match)
+            {
+                return match;
+            }
+
+            current = VisualTreeHelper.GetParent(current);
+        }
+
+        return null;
     }
 
     private async void OnDeleteGame(object sender, RoutedEventArgs e)

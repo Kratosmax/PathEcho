@@ -7,7 +7,9 @@ namespace PathEcho.Dialogs;
 
 public partial class SyncTaskEditorWindow : Window
 {
-    public SyncTaskEditorWindow()
+    private readonly Guid? _existingId;
+
+    public SyncTaskEditorWindow(SyncTaskDefinition? task = null, bool duplicate = false)
     {
         InitializeComponent();
         WindowBackdrop.Attach(this);
@@ -17,6 +19,20 @@ public partial class SyncTaskEditorWindow : Window
         ModeBox.SelectedIndex = 0;
         DeletionBox.SelectedIndex = 0;
         ConflictBox.SelectedIndex = 0;
+        if (task is not null)
+        {
+            _existingId = duplicate ? null : task.Id;
+            Title = duplicate ? "复制同步任务" : "编辑同步任务";
+            HeadingText.Text = Title;
+            SaveButton.Content = duplicate ? "创建副本" : "保存";
+            NameBox.Text = duplicate ? $"{task.Name} 副本" : task.Name;
+            LeftPathBox.Text = task.LeftPath;
+            RightPathBox.Text = task.RightPath;
+            ModeBox.SelectedIndex = (int)task.Mode;
+            DeletionBox.SelectedIndex = (int)task.DeletionMode;
+            ConflictBox.SelectedIndex = (int)task.ConflictPolicy;
+            AutoStartCheck.IsChecked = duplicate ? false : task.StartWithApplication;
+        }
     }
 
     public SyncTaskDefinition? Result { get; private set; }
@@ -40,6 +56,7 @@ public partial class SyncTaskEditorWindow : Window
         {
             Result = new SyncTaskDefinition
             {
+                Id = _existingId ?? Guid.NewGuid(),
                 Name = NameBox.Text.Trim(),
                 LeftPath = LeftPathBox.Text.Trim(),
                 RightPath = RightPathBox.Text.Trim(),

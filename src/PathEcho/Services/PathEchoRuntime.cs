@@ -50,7 +50,9 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        Configuration = await _configurationStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        Configuration = _previewMode
+            ? new AppConfiguration()
+            : await _configurationStore.LoadAsync(cancellationToken).ConfigureAwait(false);
         AppLogger.Configure(Configuration.EnableDebugLogging);
         AppLogger.Debug("Configuration loaded; runtime initialization started.");
         if (_previewSeed)
@@ -62,8 +64,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
                     new SyncTaskDefinition
                     {
                         Name = "截图与素材",
-                        LeftPath = @"D:\Projects\Screenshots",
-                        RightPath = @"E:\Mirror\Screenshots",
+                        LeftPath = @"D:\Projects\PathEcho\Design References\Screenshots\Current Iteration",
+                        RightPath = @"E:\Archive\Creative Projects\PathEcho\Screenshots\Current Iteration",
                         DeletionMode = DeletionMode.BackupThenPropagate,
                     },
                     new SyncTaskDefinition
@@ -124,7 +126,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             SyncTasks = Configuration.SyncTasks.Append(task).ToArray(),
         };
-        await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
+        await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         await InvokeOnUiAsync(() => SyncTasks.Add(new SyncTaskRow(task)));
         AppLogger.Debug($"Sync task created: {task.Id:N}.");
         if (!_previewMode && task.IsEnabled && task.StartWithApplication)
@@ -140,12 +142,47 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             GameProfiles = Configuration.GameProfiles.Append(profile).ToArray(),
         };
-        await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
+        await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         await InvokeOnUiAsync(() => GameProfiles.Add(new GameProfileRow(profile)));
         AppLogger.Debug($"Game profile created: {profile.Id:N}.");
         if (!_previewMode && profile.IsEnabled)
         {
             StartGameMonitor(profile);
+        }
+    }
+
+    public async Task UpdateSyncTaskAsync(SyncTaskDefinition task, CancellationToken cancellationToken = default)
+    {
+        task.Validate();
+        if (!Configuration.SyncTasks.Any(item => item.Id == task.Id))
+        {
+            throw new InvalidOperationException("要编辑的同步任务不存在。");
+        }
+
+        var updatedConfiguration = Configuration with
+        {
+            SyncTasks = Configuration.SyncTasks.Select(item => item.Id == task.Id ? task : item).ToArray(),
+        };
+        await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
+        Configuration = updatedConfiguration;
+
+        if (_syncMonitors.Remove(task.Id, out var monitor))
+        {
+            await monitor.DisposeAsync().ConfigureAwait(false);
+        }
+
+        await InvokeOnUiAsync(() =>
+        {
+            var index = SyncTasks.ToList().FindIndex(item => item.Definition.Id == task.Id);
+            if (index >= 0)
+            {
+                SyncTasks[index] = new SyncTaskRow(task);
+            }
+        });
+        AppLogger.Debug($"Sync task updated: {task.Id:N}.");
+        if (!_previewMode && task.IsEnabled && task.StartWithApplication)
+        {
+            await StartSyncMonitorAsync(task, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -160,7 +197,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             SyncTasks = Configuration.SyncTasks.Where(task => task.Id != taskId).ToArray(),
         };
-        await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
+        await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         await InvokeOnUiAsync(() =>
         {
             var row = SyncTasks.FirstOrDefault(item => item.Definition.Id == taskId);
@@ -182,7 +219,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             GameProfiles = Configuration.GameProfiles.Where(profile => profile.Id != profileId).ToArray(),
         };
-        await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
+        await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         await InvokeOnUiAsync(() =>
         {
             var row = GameProfiles.FirstOrDefault(item => item.Definition.Id == profileId);
@@ -195,6 +232,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public async Task<SyncRunResult> RunSyncNowAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
+        EnsureNotPreview("预览模式不会执行真实目录同步。");
         var task = Configuration.SyncTasks.Single(item => item.Id == taskId);
         var row = SyncTasks.Single(item => item.Definition.Id == taskId);
         AppLogger.Debug($"Manual synchronization started for task {taskId:N}.");
@@ -219,6 +257,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public async Task<SnapshotCreationResult> BackupNowAsync(Guid profileId, CancellationToken cancellationToken = default)
     {
+        EnsureNotPreview("预览模式不会创建真实存档备份。");
         var profile = Configuration.GameProfiles.Single(item => item.Id == profileId);
         var row = GameProfiles.Single(item => item.Definition.Id == profileId);
         AppLogger.Debug($"Manual backup started for profile {profileId:N}.");
@@ -243,6 +282,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public async Task<RestoreResult> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
     {
+        EnsureNotPreview("预览模式不会执行真实存档回档。");
         var service = new SnapshotRestoreService(new RestartManagerOccupancyService());
         return await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
     }
@@ -259,7 +299,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         var newBackupRoot = Path.GetFullPath(defaultBackupDirectory);
         var oldBackupRoot = Path.GetFullPath(Configuration.DefaultBackupDirectory);
         var movedProfiles = new List<Guid>();
-        if (!string.Equals(oldBackupRoot, newBackupRoot, StringComparison.OrdinalIgnoreCase))
+        if (!_previewMode && !string.Equals(oldBackupRoot, newBackupRoot, StringComparison.OrdinalIgnoreCase))
         {
             var manager = new BackupDirectoryManager();
             try
@@ -292,16 +332,22 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             DefaultBackupDirectory = newBackupRoot,
             UpdateNetwork = UpdateRoutePlanner.Normalize(updateNetwork),
         };
-        await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
-        AppLogger.Configure(enableDebugLogging);
+        await PersistConfigurationAsync(cancellationToken).ConfigureAwait(false);
         if (!_previewMode)
         {
+            AppLogger.Configure(enableDebugLogging);
             _startup.SetEnabled(Environment.ProcessPath!, startWithWindows);
         }
     }
 
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
     {
+        if (_previewMode)
+        {
+            await InvokeOnUiAsync(History.Clear);
+            return;
+        }
+
         var rows = new List<HistoryRow>();
         foreach (var profile in Configuration.GameProfiles)
         {
@@ -422,6 +468,20 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     private static Task InvokeOnUiAsync(Action action) =>
         System.Windows.Application.Current.Dispatcher.InvokeAsync(action).Task;
 
+    private Task PersistConfigurationAsync(CancellationToken cancellationToken) =>
+        PersistConfigurationAsync(Configuration, cancellationToken);
+
+    private Task PersistConfigurationAsync(AppConfiguration configuration, CancellationToken cancellationToken) =>
+        _previewMode ? Task.CompletedTask : _configurationStore.SaveAsync(configuration, cancellationToken);
+
+    private void EnsureNotPreview(string message)
+    {
+        if (_previewMode)
+        {
+            throw new InvalidOperationException(message);
+        }
+    }
+
     private static string FormatSyncResult(SyncRunResult result) =>
         result.CopiedFiles == 0 && result.DeletedFiles == 0 && result.Conflicts == 0
             ? "已同步"
@@ -431,13 +491,29 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 public sealed class SyncTaskRow : NotifyObject
 {
     private string _status = "等待启动";
+    private readonly bool _leftDirectoryAvailable;
+    private readonly bool _rightDirectoryAvailable;
 
-    public SyncTaskRow(SyncTaskDefinition definition) => Definition = definition;
+    public SyncTaskRow(SyncTaskDefinition definition)
+    {
+        Definition = definition;
+        _leftDirectoryAvailable = Directory.Exists(definition.LeftPath);
+        _rightDirectoryAvailable = Directory.Exists(definition.RightPath);
+    }
 
     public SyncTaskDefinition Definition { get; }
     public string Name => Definition.Name;
     public string LeftPath => Definition.LeftPath;
     public string RightPath => Definition.RightPath;
+    public bool HasDirectoryIssue => !_leftDirectoryAvailable || !_rightDirectoryAvailable;
+    public string DirectoryState => HasDirectoryIssue ? "需要检查" : "可用";
+    public string DirectoryStateDetail => (!_leftDirectoryAvailable, !_rightDirectoryAvailable) switch
+    {
+        (true, true) => "源目录和目标目录均不可用",
+        (true, false) => "源目录不可用",
+        (false, true) => "目标目录不可用",
+        _ => "源目录和目标目录均可用",
+    };
     public string Mode => Definition.Mode switch
     {
         SyncMode.LeftToRight => "左 → 右",

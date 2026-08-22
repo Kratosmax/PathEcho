@@ -22,7 +22,11 @@ public partial class App : System.Windows.Application
 
     private async void OnStartup(object sender, StartupEventArgs e)
     {
-        _singleInstance = new Mutex(true, "Local\\PathEcho.SingleInstance", out var isFirstInstance);
+        var previewMode = e.Args.Contains("--preview", StringComparer.OrdinalIgnoreCase);
+        var mutexName = previewMode
+            ? $"Local\\PathEcho.Preview.{Environment.ProcessId}"
+            : "Local\\PathEcho.SingleInstance";
+        _singleInstance = new Mutex(true, mutexName, out var isFirstInstance);
         if (!isFirstInstance)
         {
             System.Windows.MessageBox.Show("PathEcho 已经在运行。请从任务栏通知区域打开。", "PathEcho", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -30,7 +34,6 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        var previewMode = e.Args.Contains("--preview", StringComparer.OrdinalIgnoreCase);
         var previewSeed = e.Args.Contains("--preview-seed", StringComparer.OrdinalIgnoreCase);
         var background = e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase);
         _runtime = new PathEchoRuntime(previewMode, previewSeed);
@@ -66,6 +69,11 @@ public partial class App : System.Windows.Application
             if (!string.IsNullOrWhiteSpace(captureView))
             {
                 _mainWindow.SelectPreviewView(captureView);
+            }
+
+            if (string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_SELECT_FIRST"), "1", StringComparison.Ordinal))
+            {
+                _mainWindow.SelectFirstSyncTaskForPreview();
             }
 
             await CapturePreviewAsync(capturePath);

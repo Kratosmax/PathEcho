@@ -24,7 +24,7 @@ dotnet --version
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
-- `v0.2.0` 已完成本地候选构建与验证，等待提交、标签和 GitHub Actions 正式发布。
+- `v0.2.0` 本地候选代码与标签已创建；远端已确认不存在同名标签，本地 `main` 尚未推送和触发 GitHub Actions 正式发布。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
@@ -44,10 +44,12 @@ dotnet --version
 - 游戏程序可从运行中进程选择，支持程序名、PID、窗口标题和路径搜索，持久化仍只保存可执行路径。
 - 更新设置支持多条 URL 前缀、直连兜底、0 到 10 优先级与 0 禁用；HTTP 出网代理继续独立配置。
 - 可选 Debug 滚动日志、统一 PathEcho Logo、窗口/任务栏/托盘/安装器图标和高对比侧栏 Hover。
+- 同步任务页支持弹性列宽、绿色高对比 Hover/选中态、搜索与状态筛选、目录可用性提示、双击编辑、右键同步/编辑/复制/打开目录/删除，以及空数据禁用操作。
+- 预览模式使用隔离的内存配置和独立单实例锁，不读取真实用户配置，也不受已运行正式实例阻塞。
 
 ## 当前待办
 
-待完成：提交并推送 `0.2.0`、创建 `v0.2.0` 标签、等待 GitHub Actions 发布并核验 Release 资产、签名清单与哈希。维护项：GitHub Actions 当前提示官方 `checkout@v4` 与 `setup-dotnet@v4` 的 Node 20 运行时已弃用，Runner 本次强制使用 Node 24；后续应在确认官方新主版本后升级。
+待完成：推送 `main` 与 `v0.2.0` 标签；等待 GitHub Actions 发布并核验 Release 资产、签名清单与哈希。GitHub 连接需临时覆盖全局配置中失效的 `http.https://github.com.proxy=http://127.0.0.1:10809`，不应静默修改用户全局配置。维护项：GitHub Actions 当前提示官方 `checkout@v4` 与 `setup-dotnet@v4` 的 Node 20 运行时已弃用，Runner 本次强制使用 Node 24；后续应在确认官方新主版本后升级。
 
 ## 关键入口
 
@@ -77,7 +79,8 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 - Release 构建 0 警告、0 错误；SmokeTests 13/13 通过。
 - `0.2.0` 再次完成 Release 构建 0 警告、0 错误、全解决方案 `dotnet format --verify-no-changes` 和 SmokeTests 13/13；配置测试覆盖 Debug 开关与旧配置默认关闭。
 - 真实 WPF 窗口已核验侧栏对比度、Logo、多线路设置、Debug 开关、添加游戏窗口、运行中进程列表与选择回填；落盘截图位于忽略提交的 `temp/ui`。
-- `0.2.0` 本地 Lite 预览包为 `temp/preview/PathEcho-0.2.0-Lite.zip`，440236 字节，SHA-256 `2D5D88F9CD49BCFF1C545FF450EB9FCA0CCD2735062E5EC4F21A09F0F1EC5E80`；更新器只验证模式通过。
+- 同步任务页真实 WPF 截图已覆盖 1180×760 长路径与选中态、920×620 最小尺寸、空数据和禁用操作；隔离截图位于忽略提交的 `temp/ui-check`，未包含真实用户配置。
+- `0.2.0` 本地 Lite 预览包为 `temp/preview/PathEcho-0.2.0-Lite.zip`，448830 字节，SHA-256 `09F0233669CD8534FAF877809689C6BC068E93AEBDE220BA986A1BC3AD4C4A06`；更新器只验证模式通过。
 - Inno Setup 6.7.3 已成功编译带新 Logo 的 `temp/installer-test/PathEcho-0.2.0-Lite-Setup-Test.exe`。
 - `0.1.1` 补丁改动后再次完成 Release 构建 0 警告、0 错误和 SmokeTests 13/13。
 - Full/Lite 最终 ZIP 均通过对应更新器 `--verify-only` 的哈希、版本、通道和结构预检。

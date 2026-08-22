@@ -53,33 +53,83 @@
                 <Grid x:Name="SyncView">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="20"/>
+                        <RowDefinition Height="16"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="12"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
                     <Grid>
                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <StackPanel>
                             <TextBlock Text="同步任务" FontSize="26" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="SyncSummaryText" Text="0 个任务" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                            <Button x:Name="DeleteSyncButton" Content="删除选中" Style="{StaticResource DangerButton}" Click="OnDeleteSync" IsEnabled="False" Margin="0,0,8,0"/>
-                            <Button Content="全部同步" Click="OnRunAllSync" Margin="0,0,8,0"/>
+                            <Button x:Name="EditSyncButton" Content="编辑" Click="OnEditSync" Visibility="Collapsed" Margin="0,0,8,0"/>
+                            <Button x:Name="DeleteSyncButton" Content="删除" Style="{StaticResource DangerButton}" Click="OnDeleteSync" Visibility="Collapsed" Margin="0,0,8,0"/>
+                            <Button x:Name="RunAllSyncButton" Content="全部同步" Click="OnRunAllSync" Margin="0,0,8,0"/>
                             <Button Content="+  新建同步" Style="{StaticResource PrimaryButton}" Click="OnAddSync"/>
                         </StackPanel>
                     </Grid>
                     <Grid Grid.Row="2">
-                        <DataGrid x:Name="SyncGrid" ItemsSource="{Binding SyncTasks}" SelectionChanged="OnSyncSelectionChanged" FrozenColumnCount="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="150"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid>
+                            <TextBox x:Name="SyncSearchBox" Padding="34,7,10,7" TextChanged="OnSyncFilterChanged" ToolTip="搜索名称、目录、模式或状态"/>
+                            <TextBlock Text="⌕" FontSize="20" Foreground="{StaticResource MutedBrush}" Margin="11,0,0,1" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                            <TextBlock x:Name="SyncSearchHint" Text="搜索同步任务" Foreground="#87948F" Margin="34,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                        </Grid>
+                        <ComboBox x:Name="SyncStatusFilter" Grid.Column="2" SelectionChanged="OnSyncFilterChanged" ToolTip="按任务状态筛选"/>
+                    </Grid>
+                    <Grid Grid.Row="4">
+                        <DataGrid x:Name="SyncGrid" SelectionChanged="OnSyncSelectionChanged" MouseDoubleClick="OnSyncRowDoubleClick"
+                                  PreviewMouseRightButtonDown="OnSyncRowRightClick"
+                                  FrozenColumnCount="1" VerticalAlignment="Top" MaxHeight="520">
+                            <DataGrid.ContextMenu>
+                                <ContextMenu DataContext="{Binding PlacementTarget.SelectedItem, RelativeSource={RelativeSource Self}}">
+                                    <MenuItem Header="立即同步" Click="OnRunSyncMenu"/>
+                                    <Separator/>
+                                    <MenuItem Header="编辑任务" Click="OnEditSyncMenu"/>
+                                    <MenuItem Header="复制任务" Click="OnDuplicateSyncMenu"/>
+                                    <Separator/>
+                                    <MenuItem Header="打开源目录" Click="OnOpenLeftDirectory"/>
+                                    <MenuItem Header="打开目标目录" Click="OnOpenRightDirectory"/>
+                                    <Separator/>
+                                    <MenuItem Header="删除任务" Foreground="{StaticResource DangerBrush}" Click="OnDeleteSyncMenu"/>
+                                </ContextMenu>
+                            </DataGrid.ContextMenu>
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="120" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="源目录" Binding="{Binding LeftPath}" Width="180" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="目标目录" Binding="{Binding RightPath}" Width="180" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="模式" Binding="{Binding Mode}" Width="90" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="删除" Binding="{Binding Deletion}" Width="110" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="120" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTemplateColumn Header="" Width="92">
+                                <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="1.1*" MinWidth="90" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="源目录" Binding="{Binding LeftPath}" Width="2*" MinWidth="120" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="目标目录" Binding="{Binding RightPath}" Width="2*" MinWidth="120" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="模式" Binding="{Binding Mode}" Width="64" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTemplateColumn Header="目录状态" Width="82">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
-                                            <Button Content="立即同步" Padding="8,0" MinHeight="30" Click="OnRunSyncRow"/>
+                                            <TextBlock Text="{Binding DirectoryState}" ToolTip="{Binding DirectoryStateDetail}" VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasDirectoryIssue}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTextColumn Header="运行状态" Binding="{Binding Status}" Width="1.15*" MinWidth="90" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTemplateColumn Header="" Width="48">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <Button Content="▶" Padding="0" Width="30" MinHeight="30" Click="OnRunSyncRow" ToolTip="立即同步"/>
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
@@ -89,6 +139,10 @@
                             <TextBlock Text="↔" FontSize="34" Foreground="#8AA098" HorizontalAlignment="Center"/>
                             <TextBlock Text="还没有同步任务" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,4"/>
                             <Button Content="新建同步" Style="{StaticResource PrimaryButton}" Click="OnAddSync" Margin="0,18,0,0"/>
+                        </StackPanel>
+                        <StackPanel x:Name="SyncNoResults" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="未找到匹配的任务" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                            <Button Content="清除筛选" Click="OnClearSyncFilter" Margin="0,14,0,0"/>
                         </StackPanel>
                     </Grid>
                 </Grid>
