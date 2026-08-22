@@ -19,10 +19,11 @@ dotnet --version
 
 - 最后核验：2026-08-22，Asia/Shanghai。
 - 版本：`0.1.1`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；初始实现提交为 `39e08ec26bca632d280baf5f50e8cf25d6a24622`。
-- 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 已核验与初始实现提交一致。
+- 分支：`main`；正式 `v0.1.1` 标签指向提交 `21cdac90be0fa53bcea8a9707fef5de1b09b9963`。
+- 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
+- `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
@@ -41,9 +42,7 @@ dotnet --version
 
 ## 当前待办
 
-1. 验证 CI 的 ISCC 路径修复并创建补丁标签 `v0.1.1`，等待 Release Actions 成功。
-2. 核验线上 8 个资产、清单验签、SHA256、latest 路由和下载包。
-3. 发布完成后把标签、Actions、Release 和线上核验结果写回本文，再提交推送收尾文档。
+无已授权未完成事项，等待后续需求。维护项：GitHub Actions 当前提示官方 `checkout@v4` 与 `setup-dotnet@v4` 的 Node 20 运行时已弃用，Runner 本次强制使用 Node 24 且工作流成功；后续应在确认官方新主版本后升级。
 
 ## 关键入口
 
@@ -77,18 +76,22 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 - Full Setup 完成静默安装、签名清单与包二次验证、外部更新器替换、预览重启截图、卸载器保留和静默卸载；三个进程退出码均为 0，测试安装目录与卸载登记已清理。
 - UI 已核验设置页、同步页、常用尺寸、920×620 最小尺寸和强制不透明回退；证据位于忽略提交的 `temp/ui` 与 `temp/e2e`。
 - `0.1.1` 本地 Lite 预览包为 `temp/preview/PathEcho-0.1.1-Lite.zip`，390235 字节，SHA-256 `0F05CDE5C4C542FD9C16BE2F278AC18C5CF34471AE590491EDBB3B3D0AD075BF`；更新器预检与真实设置页截图通过。
+- 线上 `update-lite.json` 与 `update-full.json` 均使用客户端内置公钥实际验签通过；`update.json` 与 Lite 清单逐字节一致。
+- 线上 Lite ZIP 已实际下载并通过 SHA-256、版本、通道和包结构验证；Lite Setup 与三清单也完成实际下载哈希核对。
+- `SHA256SUMS.txt` 的 7 条记录与 GitHub API 返回的 7 个资产 digest 全部一致；两份签名清单的 URL、包大小和哈希与对应线上 ZIP 一致，latest 清单路由验证通过。
+- Full ZIP 与 Full Setup 因本机直连下载速度过慢未完整下载；两者使用 GitHub API digest、`SHA256SUMS.txt` 和已验签清单交叉核对。首个正式版本不存在上一正式客户端，因此“上一正式版升级到候选版”矩阵不适用；本地 Full 安装、更新器替换和卸载 E2E 已覆盖安装链。
 
-以下是失败标签前已完整验证的 `0.1.0` 本地候选资产，仅作为更新链回归证据，不得作为 `0.1.1` 线上哈希：
+正式 `v0.1.1` 线上资产：
 
 | 资产 | 字节 | SHA-256 |
 |---|---:|---|
-| `PathEcho-0.1.0-Full-Setup.exe` | 72998675 | `1B2EA71C52D29569A9184480FDB8C2BC4F586F9427DB34E36278A88E49CEE623` |
-| `PathEcho-0.1.0-Full.zip` | 99654023 | `60C4A8D09B37D86099E066C1318E4BBF064F7C31F9F6CA744B43C822D3984D63` |
-| `PathEcho-0.1.0-Lite-Setup.exe` | 2290937 | `70DD452CD54C0A45DA6A5BD992E6D5270C311EC96A2ED99197584818A38E81B1` |
-| `PathEcho-0.1.0-Lite.zip` | 389031 | `0AA460EE28CA153001D5ACEE4570A5C46C817BAF3C1012A1F22B10698F14CDB7` |
-| `update.json` / `update-lite.json` | 1803 | `D31D50B940681601E775B447F8CEE35D62BBE16D5E1961B7304A30EB770AAB9A` |
-| `update-full.json` | 1815 | `17134AA678371081FA1BAE21350F98F93130377DAFB2083961C9456B648BF7AA` |
-| `SHA256SUMS.txt` | 623 | `5A0EF84E8E3F6A042F3D9DA748B86840CEE356720168626FBD348E35D8DAF3F2` |
+| `PathEcho-0.1.1-Full-Setup.exe` | 73000315 | `7E631E5381AFED57B8A2FD0400F221D59F6E820A07044F2A370CBCA6D3C5B0A0` |
+| `PathEcho-0.1.1-Full.zip` | 99655027 | `F304F233738369F8DAF22A4DAF9A6E7AF54354E7E7EB1F3C53FFC754E388D89E` |
+| `PathEcho-0.1.1-Lite-Setup.exe` | 2290061 | `06A248C9FDD22167F59EDD12FF33C35A499D3C6B59CAA300E0386462D5F52C75` |
+| `PathEcho-0.1.1-Lite.zip` | 389962 | `546DA9D8F30DAFF4F90A6CEE1408F78AFA3F84CFA92026DBE556A106FFFF4C02` |
+| `update.json` / `update-lite.json` | 1835 | `0B83E567C2EC6B762D9BE5EC9C70B9A14D5A94E642F97874F0C13CCC5EA2D8B7` |
+| `update-full.json` | 1832 | `B479A3F233B901C97E02AE956F481EA9A19BE3C8AABB9B90092725E921F7AACE` |
+| `SHA256SUMS.txt` | 623 | `610C5BE02A66155FF5BD8842CABC74F77BEE0BCA95373E30CD0A14188613EC26` |
 
 本地与云端由不同环境重建时哈希可能不同；发布后必须验证线上清单与线上资产彼此匹配，不能拿本地 ZIP 时间戳差异误判篡改。
 
