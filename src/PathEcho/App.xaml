@@ -3,6 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Startup="OnStartup"
              Exit="OnExit"
+             DispatcherUnhandledException="OnDispatcherUnhandledException"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
         <SolidColorBrush x:Key="InkBrush" Color="#17201D"/>
@@ -126,6 +127,7 @@
             <Setter Property="ColumnHeaderHeight" Value="40"/>
             <Setter Property="CanUserAddRows" Value="False"/>
             <Setter Property="CanUserResizeRows" Value="False"/>
+            <Setter Property="IsReadOnly" Value="True"/>
             <Setter Property="AutoGenerateColumns" Value="False"/>
             <Setter Property="SelectionMode" Value="Single"/>
             <Setter Property="SelectionUnit" Value="FullRow"/>

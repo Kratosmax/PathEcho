@@ -10,6 +10,7 @@ using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Xml.Linq;
 
 var testRoot = Path.Combine(Environment.CurrentDirectory, "temp", "smoke", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(testRoot);
@@ -21,6 +22,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("双向冲突默认保留两份", TestBidirectionalConflictAsync),
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
     ("目录变化可合并触发自动同步", TestSyncMonitorAsync),
+    ("同一任务并发同步会串行更新基线", TestSyncTaskRunnerSerializationAsync),
+    ("只读表格不会进入编辑模式", TestReadOnlyDataGridContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
     ("Restart Manager 可识别占用且保护当前进程", TestRestartManagerAsync),
@@ -213,6 +216,82 @@ async Task TestSyncMonitorAsync()
 
     Equal("observed", await File.ReadAllTextAsync(Path.Combine(right, "watched.sav")), "监听变化未同步到目标目录。");
     True(File.Exists(Path.Combine(root, "baselines", $"{task.Id:N}.json")), "监听同步后未持久化基线。");
+}
+
+async Task TestSyncTaskRunnerSerializationAsync()
+{
+    var firstBaseline = new SyncBaseline(new Dictionary<string, SyncBaselineEntry>
+    {
+        ["first.sav"] = new(null, null),
+    });
+    var secondBaseline = new SyncBaseline(new Dictionary<string, SyncBaselineEntry>
+    {
+        ["second.sav"] = new(null, null),
+    });
+    var persisted = SyncBaseline.Empty;
+    var loadCount = 0;
+    var runCount = 0;
+    var firstRunEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var releaseFirstRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var runner = new SyncTaskRunner(
+        (_, _) =>
+        {
+            Interlocked.Increment(ref loadCount);
+            return Task.FromResult(persisted);
+        },
+        (_, baseline, _) =>
+        {
+            persisted = baseline;
+            return Task.CompletedTask;
+        },
+        async (_, baseline, _, _) =>
+        {
+            var currentRun = Interlocked.Increment(ref runCount);
+            if (currentRun == 1)
+            {
+                firstRunEntered.TrySetResult();
+                await releaseFirstRun.Task;
+                return new SyncRunResult(1, 0, 0, firstBaseline);
+            }
+
+            True(ReferenceEquals(firstBaseline, baseline), "第二次同步读取了第一次保存前的旧基线。");
+            return new SyncRunResult(1, 0, 0, secondBaseline);
+        });
+    var definition = new SyncTaskDefinition
+    {
+        Name = "并发基线测试",
+        LeftPath = Path.Combine(testRoot, "runner-left"),
+        RightPath = Path.Combine(testRoot, "runner-right"),
+    };
+
+    var first = runner.RunAsync(definition, true);
+    await firstRunEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    var second = runner.RunAsync(definition, true);
+    await Task.Delay(100);
+    Equal(1, loadCount, "第一次同步完成前，第二次同步提前读取了基线。");
+    releaseFirstRun.TrySetResult();
+    await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+
+    Equal(2, loadCount, "并发同步没有各自读取基线。");
+    True(ReferenceEquals(secondBaseline, persisted), "最终持久化的不是最新同步基线。");
+}
+
+Task TestReadOnlyDataGridContractAsync()
+{
+    XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
+    XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+    var app = XDocument.Load(Path.Combine(Environment.CurrentDirectory, "src", "PathEcho", "App.xaml"));
+    var dataGridStyle = app.Descendants(presentation + "Style")
+        .Single(element => (string?)element.Attribute("TargetType") == "DataGrid");
+    var readOnlySetter = dataGridStyle.Elements(presentation + "Setter")
+        .SingleOrDefault(element => (string?)element.Attribute("Property") == "IsReadOnly");
+    Equal("True", (string?)readOnlySetter?.Attribute("Value") ?? string.Empty, "全局 DataGrid 没有保持只读。");
+
+    var mainWindow = XDocument.Load(Path.Combine(Environment.CurrentDirectory, "src", "PathEcho", "MainWindow.xaml"));
+    var routesGrid = mainWindow.Descendants(presentation + "DataGrid")
+        .Single(element => (string?)element.Attribute(x + "Name") == "UpdateRoutesGrid");
+    Equal("False", (string?)routesGrid.Attribute("IsReadOnly") ?? string.Empty, "更新线路表没有保留编辑能力。");
+    return Task.CompletedTask;
 }
 
 async Task TestGameBackupMonitorAsync()

@@ -7,8 +7,7 @@ namespace PathEcho.Core.Sync;
 public sealed class SyncTaskMonitor : IAsyncDisposable
 {
     private readonly SyncTaskDefinition _task;
-    private readonly SyncEngine _engine;
-    private readonly SyncBaselineStore _baselineStore;
+    private readonly SyncTaskRunner _runner;
     private readonly TimeSpan _debounce;
     private readonly Channel<bool> _signals = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
     {
@@ -25,10 +24,17 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
         SyncEngine engine,
         SyncBaselineStore baselineStore,
         TimeSpan? debounce = null)
+        : this(task, new SyncTaskRunner(engine, baselineStore), debounce)
+    {
+    }
+
+    public SyncTaskMonitor(
+        SyncTaskDefinition task,
+        SyncTaskRunner runner,
+        TimeSpan? debounce = null)
     {
         _task = task;
-        _engine = engine;
-        _baselineStore = baselineStore;
+        _runner = runner;
         _debounce = debounce ?? TimeSpan.FromMilliseconds(650);
     }
 
@@ -44,9 +50,7 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
         }
 
         _task.Validate();
-        var baseline = await _baselineStore.LoadAsync(_task.Id, cancellationToken).ConfigureAwait(false);
-        var initial = await _engine.RunAsync(_task, baseline, true, cancellationToken).ConfigureAwait(false);
-        await _baselineStore.SaveAsync(_task.Id, initial.Baseline, cancellationToken).ConfigureAwait(false);
+        var initial = await _runner.RunAsync(_task, true, cancellationToken).ConfigureAwait(false);
 
         foreach (var root in GetWatchedRoots())
         {
@@ -55,7 +59,7 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
             watcher.EnableRaisingEvents = true;
         }
 
-        _worker = RunWorkerAsync(initial.Baseline, _stopping.Token);
+        _worker = RunWorkerAsync(_stopping.Token);
         Synchronized?.Invoke(this, initial);
     }
 
@@ -84,7 +88,7 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
         _stopping.Dispose();
     }
 
-    private async Task RunWorkerAsync(SyncBaseline baseline, CancellationToken cancellationToken)
+    private async Task RunWorkerAsync(CancellationToken cancellationToken)
     {
         while (await _signals.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -102,9 +106,7 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
 
             try
             {
-                var result = await _engine.RunAsync(_task, baseline, forceFullScan, cancellationToken).ConfigureAwait(false);
-                await _baselineStore.SaveAsync(_task.Id, result.Baseline, cancellationToken).ConfigureAwait(false);
-                baseline = result.Baseline;
+                var result = await _runner.RunAsync(_task, forceFullScan, cancellationToken).ConfigureAwait(false);
                 Synchronized?.Invoke(this, result);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -43,9 +43,9 @@ public partial class App : System.Windows.Application
         }
         catch (Exception exception)
         {
-            AppLogger.Error("Application startup failed.", exception);
+            AppLogger.Critical("Application startup failed.", exception);
             System.Windows.MessageBox.Show($"PathEcho 启动失败，尚未开始后台监听。\n\n{exception.Message}", "PathEcho", MessageBoxButton.OK, MessageBoxImage.Error);
-            Shutdown();
+            ExitApplication();
             return;
         }
 
@@ -96,10 +96,29 @@ public partial class App : System.Windows.Application
         _mainWindow.Activate();
     }
 
-    public void ExitApplication()
+    public async void ExitApplication()
     {
+        if (_isExiting)
+        {
+            return;
+        }
+
         _isExiting = true;
         _mainWindow?.Close();
+        if (_runtime is not null)
+        {
+            try
+            {
+                await _runtime.DisposeAsync();
+            }
+            catch (Exception exception)
+            {
+                AppLogger.Critical("Application shutdown cleanup failed.", exception);
+            }
+
+            _runtime = null;
+        }
+
         Shutdown();
     }
 
@@ -157,15 +176,22 @@ public partial class App : System.Windows.Application
         ExitApplication();
     }
 
-    private async void OnExit(object sender, ExitEventArgs e)
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        AppLogger.Critical("Unhandled UI exception.", e.Exception);
+        e.Handled = true;
+        System.Windows.MessageBox.Show(
+            $"PathEcho 遇到无法恢复的异常，需要关闭。\n\n{e.Exception.Message}\n\n错误详情已写入日志。",
+            "PathEcho",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+        ExitApplication();
+    }
+
+    private void OnExit(object sender, ExitEventArgs e)
     {
         _trayIcon?.Dispose();
         _trayIconImage?.Dispose();
-        if (_runtime is not null)
-        {
-            await _runtime.DisposeAsync();
-        }
-
         if (_singleInstance is not null)
         {
             _singleInstance.ReleaseMutex();

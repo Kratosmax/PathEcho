@@ -18,8 +18,8 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-22，Asia/Shanghai。
-- 版本：`0.2.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；正式 `v0.1.1` 标签指向提交 `21cdac90be0fa53bcea8a9707fef5de1b09b9963`。
+- 版本：`0.2.1`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 分支：`main`；本轮校准基线为 `0f7dc8c236ad0cd8fe989d651bf6f7e249333b2c`，与 `origin/main` 一致；正式 `v0.2.0` 标签指向 `7a4749aca3ecd182f64c8a118dbf57088f99dd47`。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
@@ -49,7 +49,8 @@ dotnet --version
 
 ## 当前待办
 
-当前发布任务已完成。维护项：GitHub 连接需临时覆盖全局配置中失效的 `http.https://github.com.proxy=http://127.0.0.1:10809`，不应静默修改用户全局配置；GitHub Actions 当前提示官方 `checkout@v4` 与 `setup-dotnet@v4` 的 Node 20 运行时已弃用，Runner 本次强制使用 Node 24，后续应在确认官方新主版本后升级。
+- `0.2.1` 双击闪退与运行时一致性修复已获提交、推送和发布授权；当前待完成完整 Release 构建、签名云端发布、上一正式版兼容检查和线上资产核验。正式 `v0.2.0` 不得覆盖。
+- GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。发布工作流已按官方最新稳定版本升级到 `checkout@v7` 与 `setup-dotnet@v6`。
 
 ## 关键入口
 
@@ -68,6 +69,17 @@ dotnet --version
 ## 验证证据
 
 2026-08-22 实际通过：
+
+- 本轮修复：全局只读 `DataGrid` 阻止 WPF 向只读行模型执行 TwoWay 回写；同步表双击仅接受真实数据行，运行进程表双击同样限制到数据行。
+- 本轮运行时加固：手动/后台同步共享完整基线事务锁，手动/后台游戏备份共享服务锁；配置增删改先持久化再切换内存状态；监听启动失败隔离；备份目录迁移失败使用不可取消令牌回滚；未知 UI 异常强制落日志并等待清理后退出。
+- `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误。
+- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：15/15 通过，新增并发基线串行与只读表格契约回归。
+- `dotnet format PathEcho.sln --no-restore --verify-no-changes`、`git diff --check` 通过。
+- `0.2.1` 最终本地 Lite 预览包 `temp/preview/PathEcho-0.2.1-Lite.zip`：454409 字节，SHA-256 `98B854000F4521272F5DB93C6478BA17701D15AE60B1D0B3CC351CC82F432766`；更新器 `--verify-only` 返回 0。本地预览仅供验收，不是 Release。
+- 真实 WPF 隔离预览已核验：双击同步源路径打开编辑窗且进程存活；双击游戏存档路径不退出；运行进程列表双击会回填程序名和路径；更新线路仍可新增编辑行。920×620 最小窗截图为 `temp/ui-check/double-click-fix-min-920x620.png`，截图进程走等待式退出并返回 0。
+- `0.2.1` 四包本地构建已生成 Lite/Full ZIP 和 Setup；两个 ZIP 均通过候选包内更新器的版本、通道、哈希和结构预检，两个安装器由 Inno Setup 6.7.3 编译成功。一次性测试密钥不匹配客户端内置正式公钥，因此本地发布脚本按安全设计在清单自验阶段拒绝继续；正式清单只能由 GitHub Actions Secret 生成。
+- 上一正式版 `v0.2.0` 原始 Lite ZIP（448783 字节，SHA-256 `F8267BD06DCF07D0C689ED8449A2D939E04E4FFD4EC71AD6C91F8356F708F292`）中的旧更新器已接受 `0.2.1` Lite 候选包。旧 Full 原包直连下载超过约 4 分钟且未产生文件，已中止；发布后需用线上签名清单、资产 digest、SHA256 文件和 Full 包结构交叉核验，不得宣称旧 Full 完整升级链已通过。
+- `0.2.1` 920×620 最小窗截图为 `temp/ui-check/release-0.2.1-sync-920x620.png`，界面版本显示、选中态、长路径布局和等待式退出均正常，进程退出码为 0。
 
 ~~~powershell
 dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal

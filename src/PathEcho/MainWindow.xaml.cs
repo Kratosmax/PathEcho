@@ -493,10 +493,15 @@ public partial class MainWindow : Window
 
     private void OnSyncRowDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (FindAncestor<Button>(e.OriginalSource as DependencyObject) is null && SyncGrid.SelectedItem is SyncTaskRow row)
+        if (e.OriginalSource is not DependencyObject source ||
+            FindAncestor<Button>(source) is not null ||
+            ItemsControl.ContainerFromElement(SyncGrid, source) is not DataGridRow { Item: SyncTaskRow row })
         {
-            EditSync(row);
+            return;
         }
+
+        e.Handled = true;
+        EditSync(row);
     }
 
     private void OnSyncRowRightClick(object sender, MouseButtonEventArgs e)
@@ -641,7 +646,9 @@ public partial class MainWindow : Window
                 return match;
             }
 
-            current = VisualTreeHelper.GetParent(current);
+            current = current is FrameworkContentElement content
+                ? content.Parent
+                : VisualTreeHelper.GetParent(current);
         }
 
         return null;

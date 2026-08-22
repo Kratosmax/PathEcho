@@ -2,7 +2,9 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Data;
+using PathEcho.Services;
 
 namespace PathEcho.Dialogs;
 
@@ -31,15 +33,26 @@ public partial class RunningProcessSelectionWindow : Window
     {
         ProcessCountText.Text = "正在读取进程...";
         ProcessGrid.IsEnabled = false;
-        var rows = await Task.Run(EnumerateProcesses);
-        Processes.Clear();
-        foreach (var row in rows)
+        try
         {
-            Processes.Add(row);
-        }
+            var rows = await Task.Run(EnumerateProcesses);
+            Processes.Clear();
+            foreach (var row in rows)
+            {
+                Processes.Add(row);
+            }
 
-        ProcessGrid.IsEnabled = true;
-        ProcessCountText.Text = $"可选择 {Processes.Count} 个程序";
+            ProcessCountText.Text = $"可选择 {Processes.Count} 个程序";
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("Running process enumeration failed.", exception);
+            ProcessCountText.Text = $"读取进程失败：{exception.Message}";
+        }
+        finally
+        {
+            ProcessGrid.IsEnabled = true;
+        }
     }
 
     private static IReadOnlyList<RunningProcessRow> EnumerateProcesses()
@@ -103,8 +116,10 @@ public partial class RunningProcessSelectionWindow : Window
 
     private void OnProcessDoubleClick(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        if (ProcessGrid.SelectedItem is RunningProcessRow)
+        if (e.OriginalSource is DependencyObject source &&
+            ItemsControl.ContainerFromElement(ProcessGrid, source) is DataGridRow { Item: RunningProcessRow })
         {
+            e.Handled = true;
             SelectCurrent();
         }
     }

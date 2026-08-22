@@ -52,6 +52,14 @@ public static class AppLogger
         }
     }
 
+    public static void Critical(string message, Exception exception)
+    {
+        lock (Gate)
+        {
+            WriteCore("CRITICAL", message, exception);
+        }
+    }
+
     public static void OpenLogDirectory()
     {
         Directory.CreateDirectory(LogDirectory);

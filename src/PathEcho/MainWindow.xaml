@@ -261,7 +261,7 @@
                         </Grid>
                         <DataGrid x:Name="UpdateRoutesGrid" Height="176" Margin="0,0,0,6" RowHeight="42"
                                   ItemsSource="{Binding UpdateRoutes, RelativeSource={RelativeSource AncestorType=Window}}"
-                                  SelectionChanged="OnUpdateRouteSelectionChanged">
+                                  SelectionChanged="OnUpdateRouteSelectionChanged" IsReadOnly="False">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="类型" Binding="{Binding Type}" IsReadOnly="True" Width="90" ElementStyle="{StaticResource GridTextStyle}"/>
                                 <DataGridTemplateColumn Header="地址" Width="*" MinWidth="280">
