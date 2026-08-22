@@ -37,6 +37,22 @@ public partial class GameProfileEditorWindow : Window
         }
     }
 
+    private void OnSelectRunningProcess(object sender, RoutedEventArgs e)
+    {
+        var dialog = new RunningProcessSelectionWindow { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.SelectedProcess is null)
+        {
+            return;
+        }
+
+        ProcessPathBox.Text = dialog.SelectedProcess.ExecutablePath;
+        ProcessCheck.IsChecked = true;
+        if (string.IsNullOrWhiteSpace(NameBox.Text))
+        {
+            NameBox.Text = dialog.SelectedProcess.Name;
+        }
+    }
+
     private void OnCreate(object sender, RoutedEventArgs e)
     {
         try

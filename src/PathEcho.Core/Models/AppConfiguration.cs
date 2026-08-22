@@ -12,6 +12,8 @@ public sealed record AppConfiguration
 
     public bool CheckForUpdates { get; init; } = true;
 
+    public bool EnableDebugLogging { get; init; }
+
     public UpdateNetworkOptions UpdateNetwork { get; init; } = new();
 
     public string DefaultBackupDirectory { get; init; } = Path.Combine(

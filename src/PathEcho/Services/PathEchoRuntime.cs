@@ -51,6 +51,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         Configuration = await _configurationStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        AppLogger.Configure(Configuration.EnableDebugLogging);
+        AppLogger.Debug("Configuration loaded; runtime initialization started.");
         if (_previewSeed)
         {
             Configuration = Configuration with
@@ -123,7 +125,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             SyncTasks = Configuration.SyncTasks.Append(task).ToArray(),
         };
         await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
-        SyncTasks.Add(new SyncTaskRow(task));
+        await InvokeOnUiAsync(() => SyncTasks.Add(new SyncTaskRow(task)));
+        AppLogger.Debug($"Sync task created: {task.Id:N}.");
         if (!_previewMode && task.IsEnabled && task.StartWithApplication)
         {
             await StartSyncMonitorAsync(task, cancellationToken).ConfigureAwait(false);
@@ -138,7 +141,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             GameProfiles = Configuration.GameProfiles.Append(profile).ToArray(),
         };
         await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
-        GameProfiles.Add(new GameProfileRow(profile));
+        await InvokeOnUiAsync(() => GameProfiles.Add(new GameProfileRow(profile)));
+        AppLogger.Debug($"Game profile created: {profile.Id:N}.");
         if (!_previewMode && profile.IsEnabled)
         {
             StartGameMonitor(profile);
@@ -157,11 +161,14 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             SyncTasks = Configuration.SyncTasks.Where(task => task.Id != taskId).ToArray(),
         };
         await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
-        var row = SyncTasks.FirstOrDefault(item => item.Definition.Id == taskId);
-        if (row is not null)
+        await InvokeOnUiAsync(() =>
         {
-            SyncTasks.Remove(row);
-        }
+            var row = SyncTasks.FirstOrDefault(item => item.Definition.Id == taskId);
+            if (row is not null)
+            {
+                SyncTasks.Remove(row);
+            }
+        });
     }
 
     public async Task RemoveGameProfileAsync(Guid profileId, CancellationToken cancellationToken = default)
@@ -176,30 +183,36 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             GameProfiles = Configuration.GameProfiles.Where(profile => profile.Id != profileId).ToArray(),
         };
         await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
-        var row = GameProfiles.FirstOrDefault(item => item.Definition.Id == profileId);
-        if (row is not null)
+        await InvokeOnUiAsync(() =>
         {
-            GameProfiles.Remove(row);
-        }
+            var row = GameProfiles.FirstOrDefault(item => item.Definition.Id == profileId);
+            if (row is not null)
+            {
+                GameProfiles.Remove(row);
+            }
+        });
     }
 
     public async Task<SyncRunResult> RunSyncNowAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         var task = Configuration.SyncTasks.Single(item => item.Id == taskId);
         var row = SyncTasks.Single(item => item.Definition.Id == taskId);
-        row.Status = "正在同步";
+        AppLogger.Debug($"Manual synchronization started for task {taskId:N}.");
+        await InvokeOnUiAsync(() => row.Status = "正在同步");
         try
         {
             var baseline = await _baselineStore.LoadAsync(task.Id, cancellationToken).ConfigureAwait(false);
             var engine = GetSyncEngine(task.Id);
             var result = await engine.RunAsync(task, baseline, true, cancellationToken).ConfigureAwait(false);
             await _baselineStore.SaveAsync(task.Id, result.Baseline, cancellationToken).ConfigureAwait(false);
-            row.Status = FormatSyncResult(result);
+            await InvokeOnUiAsync(() => row.Status = FormatSyncResult(result));
+            AppLogger.Debug($"Manual synchronization completed for task {taskId:N}.");
             return result;
         }
-        catch
+        catch (Exception exception)
         {
-            row.Status = "同步失败";
+            await InvokeOnUiAsync(() => row.Status = "同步失败");
+            AppLogger.Error($"Manual synchronization failed for task {taskId:N}.", exception);
             throw;
         }
     }
@@ -208,19 +221,22 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     {
         var profile = Configuration.GameProfiles.Single(item => item.Id == profileId);
         var row = GameProfiles.Single(item => item.Definition.Id == profileId);
-        row.Status = "正在备份";
+        AppLogger.Debug($"Manual backup started for profile {profileId:N}.");
+        await InvokeOnUiAsync(() => row.Status = "正在备份");
         try
         {
             var service = new GameBackupService(profile, Configuration.DefaultBackupDirectory, _snapshotStore);
             var result = await service.CreateAsync(BackupTrigger.None, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("手动备份被意外跳过。");
-            row.Status = $"已备份 {result.FileCount} 个文件";
+            await InvokeOnUiAsync(() => row.Status = $"已备份 {result.FileCount} 个文件");
             await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
+            AppLogger.Debug($"Manual backup completed for profile {profileId:N}.");
             return result;
         }
-        catch
+        catch (Exception exception)
         {
-            row.Status = "备份失败";
+            await InvokeOnUiAsync(() => row.Status = "备份失败");
+            AppLogger.Error($"Manual backup failed for profile {profileId:N}.", exception);
             throw;
         }
     }
@@ -235,6 +251,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         bool startWithWindows,
         bool startMinimized,
         bool checkForUpdates,
+        bool enableDebugLogging,
         string defaultBackupDirectory,
         UpdateNetworkOptions updateNetwork,
         CancellationToken cancellationToken = default)
@@ -271,10 +288,12 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             StartWithWindows = startWithWindows,
             StartMinimized = startMinimized,
             CheckForUpdates = checkForUpdates,
+            EnableDebugLogging = enableDebugLogging,
             DefaultBackupDirectory = newBackupRoot,
             UpdateNetwork = UpdateRoutePlanner.Normalize(updateNetwork),
         };
         await _configurationStore.SaveAsync(Configuration, cancellationToken).ConfigureAwait(false);
+        AppLogger.Configure(enableDebugLogging);
         if (!_previewMode)
         {
             _startup.SetEnabled(Environment.ProcessPath!, startWithWindows);
@@ -328,7 +347,11 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
         var monitor = new SyncTaskMonitor(task, GetSyncEngine(task.Id), _baselineStore);
         monitor.Synchronized += (_, result) => SetSyncStatus(task.Id, FormatSyncResult(result));
-        monitor.SynchronizationFailed += (_, exception) => SetSyncStatus(task.Id, $"失败：{exception.Message}");
+        monitor.SynchronizationFailed += (_, exception) =>
+        {
+            AppLogger.Error($"Automatic synchronization failed for task {task.Id:N}.", exception);
+            SetSyncStatus(task.Id, $"失败：{exception.Message}");
+        };
         _syncMonitors.Add(task.Id, monitor);
         try
         {
@@ -356,7 +379,11 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             SetGameStatus(profile.Id, $"已备份 {result.FileCount} 个文件");
             _ = RefreshHistoryAsync();
         };
-        monitor.BackupFailed += (_, exception) => SetGameStatus(profile.Id, $"失败：{exception.Message}");
+        monitor.BackupFailed += (_, exception) =>
+        {
+            AppLogger.Error($"Automatic backup failed for profile {profile.Id:N}.", exception);
+            SetGameStatus(profile.Id, $"失败：{exception.Message}");
+        };
         monitor.Start();
         _gameMonitors.Add(profile.Id, monitor);
         SetGameStatus(profile.Id, "监听中");
@@ -391,6 +418,9 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             row.Status = status;
         }
     });
+
+    private static Task InvokeOnUiAsync(Action action) =>
+        System.Windows.Application.Current.Dispatcher.InvokeAsync(action).Task;
 
     private static string FormatSyncResult(SyncRunResult result) =>
         result.CopiedFiles == 0 && result.DeletedFiles == 0 && result.Conflicts == 0

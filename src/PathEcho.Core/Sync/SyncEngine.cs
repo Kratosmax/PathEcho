@@ -29,62 +29,62 @@ public sealed class SyncEngine
         await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-        task.Validate();
-        var leftRoot = SyncTaskDefinition.NormalizeRoot(task.LeftPath);
-        var rightRoot = SyncTaskDefinition.NormalizeRoot(task.RightPath);
-        Directory.CreateDirectory(leftRoot);
-        Directory.CreateDirectory(rightRoot);
-        if (forceFullScan)
-        {
-            _scanner.Invalidate(leftRoot);
-            _scanner.Invalidate(rightRoot);
-        }
-
-        var left = await _scanner.ScanAsync(leftRoot, cancellationToken).ConfigureAwait(false);
-        var right = await _scanner.ScanAsync(rightRoot, cancellationToken).ConfigureAwait(false);
-        var plan = _planner.CreatePlan(task, left, right, baseline);
-        var copied = 0;
-        var deleted = 0;
-        var conflicts = 0;
-
-        foreach (var action in plan.Actions)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var leftPath = SafeCombine(leftRoot, action.RelativePath);
-            var rightPath = SafeCombine(rightRoot, action.RelativePath);
-            switch (action.Kind)
+            task.Validate();
+            var leftRoot = SyncTaskDefinition.NormalizeRoot(task.LeftPath);
+            var rightRoot = SyncTaskDefinition.NormalizeRoot(task.RightPath);
+            Directory.CreateDirectory(leftRoot);
+            Directory.CreateDirectory(rightRoot);
+            if (forceFullScan)
             {
-                case SyncActionKind.CopyLeftToRight:
-                    await AtomicFileOperations.CopyAsync(leftPath, rightPath, cancellationToken).ConfigureAwait(false);
-                    copied++;
-                    break;
-                case SyncActionKind.CopyRightToLeft:
-                    await AtomicFileOperations.CopyAsync(rightPath, leftPath, cancellationToken).ConfigureAwait(false);
-                    copied++;
-                    break;
-                case SyncActionKind.DeleteLeft:
-                    await DeleteAsync(task, action.RelativePath, leftPath, cancellationToken).ConfigureAwait(false);
-                    deleted++;
-                    break;
-                case SyncActionKind.DeleteRight:
-                    await DeleteAsync(task, action.RelativePath, rightPath, cancellationToken).ConfigureAwait(false);
-                    deleted++;
-                    break;
-                case SyncActionKind.KeepBothConflict:
-                    await PreserveConflictAsync(action.RelativePath, leftPath, rightPath, cancellationToken).ConfigureAwait(false);
-                    conflicts++;
-                    break;
+                _scanner.Invalidate(leftRoot);
+                _scanner.Invalidate(rightRoot);
             }
-        }
 
-        var finalLeft = await _scanner.ScanAsync(leftRoot, cancellationToken).ConfigureAwait(false);
-        var finalRight = await _scanner.ScanAsync(rightRoot, cancellationToken).ConfigureAwait(false);
-        var keys = finalLeft.Keys.Concat(finalRight.Keys).Distinct(StringComparer.OrdinalIgnoreCase);
-        var entries = keys.ToDictionary(
-            key => key,
-            key => new SyncBaselineEntry(finalLeft.GetValueOrDefault(key), finalRight.GetValueOrDefault(key)),
-            StringComparer.OrdinalIgnoreCase);
-        return new SyncRunResult(copied, deleted, conflicts, new SyncBaseline(entries));
+            var left = await _scanner.ScanAsync(leftRoot, cancellationToken).ConfigureAwait(false);
+            var right = await _scanner.ScanAsync(rightRoot, cancellationToken).ConfigureAwait(false);
+            var plan = _planner.CreatePlan(task, left, right, baseline);
+            var copied = 0;
+            var deleted = 0;
+            var conflicts = 0;
+
+            foreach (var action in plan.Actions)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leftPath = SafeCombine(leftRoot, action.RelativePath);
+                var rightPath = SafeCombine(rightRoot, action.RelativePath);
+                switch (action.Kind)
+                {
+                    case SyncActionKind.CopyLeftToRight:
+                        await AtomicFileOperations.CopyAsync(leftPath, rightPath, cancellationToken).ConfigureAwait(false);
+                        copied++;
+                        break;
+                    case SyncActionKind.CopyRightToLeft:
+                        await AtomicFileOperations.CopyAsync(rightPath, leftPath, cancellationToken).ConfigureAwait(false);
+                        copied++;
+                        break;
+                    case SyncActionKind.DeleteLeft:
+                        await DeleteAsync(task, action.RelativePath, leftPath, cancellationToken).ConfigureAwait(false);
+                        deleted++;
+                        break;
+                    case SyncActionKind.DeleteRight:
+                        await DeleteAsync(task, action.RelativePath, rightPath, cancellationToken).ConfigureAwait(false);
+                        deleted++;
+                        break;
+                    case SyncActionKind.KeepBothConflict:
+                        await PreserveConflictAsync(action.RelativePath, leftPath, rightPath, cancellationToken).ConfigureAwait(false);
+                        conflicts++;
+                        break;
+                }
+            }
+
+            var finalLeft = await _scanner.ScanAsync(leftRoot, cancellationToken).ConfigureAwait(false);
+            var finalRight = await _scanner.ScanAsync(rightRoot, cancellationToken).ConfigureAwait(false);
+            var keys = finalLeft.Keys.Concat(finalRight.Keys).Distinct(StringComparer.OrdinalIgnoreCase);
+            var entries = keys.ToDictionary(
+                key => key,
+                key => new SyncBaselineEntry(finalLeft.GetValueOrDefault(key), finalRight.GetValueOrDefault(key)),
+                StringComparer.OrdinalIgnoreCase);
+            return new SyncRunResult(copied, deleted, conflicts, new SyncBaseline(entries));
         }
         finally
         {

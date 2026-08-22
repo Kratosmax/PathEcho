@@ -64,6 +64,7 @@ async Task TestConfigurationStoreAsync()
     };
     var expected = new AppConfiguration
     {
+        EnableDebugLogging = true,
         SyncTasks = new[] { task },
         UpdateNetwork = new UpdateNetworkOptions
         {
@@ -82,6 +83,7 @@ async Task TestConfigurationStoreAsync()
 
     Equal(1, actual.SyncTasks.Count, "配置任务数量不正确。");
     Equal(task.Id, actual.SyncTasks[0].Id, "配置任务 ID 未保持一致。");
+    True(actual.EnableDebugLogging, "Debug 日志开关未保持一致。");
     Equal(2, actual.UpdateNetwork.UrlRoutes.Count, "更新线路配置未保持一致。");
     Equal("http://127.0.0.1:7890", actual.UpdateNetwork.HttpProxy!, "HTTP 代理配置未保持一致。");
 
@@ -90,6 +92,7 @@ async Task TestConfigurationStoreAsync()
     var legacy = await new JsonConfigurationStore(legacyPath).LoadAsync();
     Equal(1, legacy.UpdateNetwork.UrlRoutes.Count, "旧配置未恢复直连更新线路。");
     True(legacy.UpdateNetwork.UrlRoutes[0].IsDirect, "旧配置恢复的更新线路不是直连。");
+    False(legacy.EnableDebugLogging, "旧配置错误启用了 Debug 日志。");
 }
 
 async Task TestOneWaySyncAsync()

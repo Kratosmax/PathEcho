@@ -48,8 +48,10 @@
             </StackPanel>
             <StackPanel Grid.Row="7" Margin="0,14,0,0">
                 <TextBlock Text="游戏程序（用于退出后备份）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
-                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                    <TextBox x:Name="ProcessPathBox"/><Button Grid.Column="2" Content="浏览" Click="OnBrowseProcess"/>
+                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBox x:Name="ProcessPathBox"/>
+                    <Button Grid.Column="2" Content="选择进程" Click="OnSelectRunningProcess"/>
+                    <Button Grid.Column="4" Content="浏览" Click="OnBrowseProcess"/>
                 </Grid>
                 <TextBlock x:Name="ErrorText" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
             </StackPanel>

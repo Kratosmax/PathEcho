@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -22,6 +23,10 @@ public partial class MainWindow : Window
 {
     private readonly PathEchoRuntime _runtime;
 
+    public ObservableCollection<UpdateRouteRow> UpdateRoutes { get; } = new();
+
+    public IReadOnlyList<int> UpdateRoutePriorities { get; } = Enumerable.Range(0, 11).Reverse().ToArray();
+
     public MainWindow(PathEchoRuntime runtime)
     {
         _runtime = runtime;
@@ -34,8 +39,17 @@ public partial class MainWindow : Window
         StartupCheck.IsChecked = runtime.Configuration.StartWithWindows;
         MinimizedCheck.IsChecked = runtime.Configuration.StartMinimized;
         UpdateCheck.IsChecked = runtime.Configuration.CheckForUpdates;
-        UpdatePrefixBox.Text = runtime.Configuration.UpdateNetwork.UrlRoutes
-            .FirstOrDefault(route => !route.IsDirect)?.BaseUrl ?? string.Empty;
+        DebugLogCheck.IsChecked = runtime.Configuration.EnableDebugLogging;
+        foreach (var route in runtime.Configuration.UpdateNetwork.UrlRoutes)
+        {
+            UpdateRoutes.Add(new UpdateRouteRow(route));
+        }
+
+        if (UpdateRoutes.All(route => !route.IsDirect))
+        {
+            UpdateRoutes.Add(new UpdateRouteRow(UpdateUrlRoute.Direct));
+        }
+
         HttpProxyBox.Text = runtime.Configuration.UpdateNetwork.HttpProxy ?? string.Empty;
         BackupDirectoryBox.Text = runtime.Configuration.DefaultBackupDirectory;
         BackgroundStatusText.Text = runtime.IsPreviewMode ? "预览模式 · 未启动监听" : "后台监听已启用";
@@ -248,6 +262,7 @@ public partial class MainWindow : Window
                 StartupCheck.IsChecked == true,
                 MinimizedCheck.IsChecked == true,
                 UpdateCheck.IsChecked == true,
+                DebugLogCheck.IsChecked == true,
                 BackupDirectoryBox.Text.Trim(),
                 BuildUpdateNetworkOptions());
             BackupDirectoryBox.Text = _runtime.Configuration.DefaultBackupDirectory;
@@ -284,26 +299,57 @@ public partial class MainWindow : Window
                 new UpdateWindow(this, _runtime.Configuration.UpdateNetwork).ShowDialog();
             }
         }
-        catch
+        catch (Exception exception)
         {
+            AppLogger.Error("Background update check failed.", exception);
             StatusText.Text = "后台更新检查失败，可在设置中重试";
         }
     }
 
     private UpdateNetworkOptions BuildUpdateNetworkOptions()
     {
-        var routes = new List<UpdateUrlRoute>();
-        if (!string.IsNullOrWhiteSpace(UpdatePrefixBox.Text))
+        var routes = UpdateRoutes.Select(route => new UpdateUrlRoute
         {
-            routes.Add(new UpdateUrlRoute { BaseUrl = UpdatePrefixBox.Text.Trim(), Priority = 8 });
-        }
-
-        routes.Add(UpdateUrlRoute.Direct);
+            BaseUrl = route.IsDirect ? null : route.BaseUrl.Trim(),
+            Priority = route.Priority,
+            IsDirect = route.IsDirect,
+        }).ToArray();
         return UpdateRoutePlanner.Normalize(new UpdateNetworkOptions
         {
             UrlRoutes = routes,
             HttpProxy = string.IsNullOrWhiteSpace(HttpProxyBox.Text) ? null : HttpProxyBox.Text.Trim(),
         });
+    }
+
+    private void OnAddUpdateRoute(object sender, RoutedEventArgs e)
+    {
+        var route = new UpdateRouteRow(new UpdateUrlRoute { Priority = 8 });
+        UpdateRoutes.Add(route);
+        UpdateRoutesGrid.SelectedItem = route;
+        UpdateRoutesGrid.ScrollIntoView(route);
+    }
+
+    private void OnDeleteUpdateRoute(object sender, RoutedEventArgs e)
+    {
+        if (UpdateRoutesGrid.SelectedItem is UpdateRouteRow { IsDirect: false } route)
+        {
+            UpdateRoutes.Remove(route);
+        }
+    }
+
+    private void OnUpdateRouteSelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        DeleteUpdateRouteButton.IsEnabled = UpdateRoutesGrid.SelectedItem is UpdateRouteRow { IsDirect: false };
+
+    private void OnOpenLogs(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            AppLogger.OpenLogDirectory();
+        }
+        catch (Exception exception)
+        {
+            ShowError(exception.Message);
+        }
     }
 
     private async void OnDiscoverBackups(object sender, RoutedEventArgs e)
@@ -400,6 +446,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             StatusText.Text = "操作失败";
+            AppLogger.Error(status, exception);
             ShowError(exception.Message);
         }
         finally
@@ -420,4 +467,19 @@ public partial class MainWindow : Window
             StatusText.Text = "PathEcho 仍在后台监听";
         }
     }
+}
+
+public sealed class UpdateRouteRow
+{
+    public UpdateRouteRow(UpdateUrlRoute route)
+    {
+        IsDirect = route.IsDirect;
+        BaseUrl = route.IsDirect ? "GitHub 官方地址" : route.BaseUrl ?? string.Empty;
+        Priority = route.Priority;
+    }
+
+    public bool IsDirect { get; }
+    public string Type => IsDirect ? "直连" : "URL 前缀";
+    public string BaseUrl { get; set; }
+    public int Priority { get; set; }
 }

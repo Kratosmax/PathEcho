@@ -15,6 +15,7 @@ public partial class App : System.Windows.Application
     private PathEchoRuntime? _runtime;
     private MainWindow? _mainWindow;
     private Forms.NotifyIcon? _trayIcon;
+    private Icon? _trayIconImage;
     private bool _isExiting;
 
     public bool IsExiting => _isExiting;
@@ -39,6 +40,7 @@ public partial class App : System.Windows.Application
         }
         catch (Exception exception)
         {
+            AppLogger.Error("Application startup failed.", exception);
             System.Windows.MessageBox.Show($"PathEcho 启动失败，尚未开始后台监听。\n\n{exception.Message}", "PathEcho", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown();
             return;
@@ -95,6 +97,9 @@ public partial class App : System.Windows.Application
 
     private void CreateTrayIcon()
     {
+        var iconResource = GetResourceStream(new Uri("pack://application:,,,/Assets/PathEcho.ico"))
+            ?? throw new InvalidOperationException("无法加载 PathEcho 图标资源。");
+        _trayIconImage = new Icon(iconResource.Stream);
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开 PathEcho", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
         menu.Items.Add(new Forms.ToolStripSeparator());
@@ -102,7 +107,7 @@ public partial class App : System.Windows.Application
         _trayIcon = new Forms.NotifyIcon
         {
             Text = "PathEcho",
-            Icon = SystemIcons.Application,
+            Icon = _trayIconImage,
             ContextMenuStrip = menu,
             Visible = true,
         };
@@ -147,6 +152,7 @@ public partial class App : System.Windows.Application
     private async void OnExit(object sender, ExitEventArgs e)
     {
         _trayIcon?.Dispose();
+        _trayIconImage?.Dispose();
         if (_runtime is not null)
         {
             await _runtime.DisposeAsync();

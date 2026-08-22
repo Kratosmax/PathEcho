@@ -31,6 +31,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\PathEcho.exe
+SetupIconFile=..\src\PathEcho\Assets\PathEcho.ico
 WizardStyle=modern
 
 [Files]

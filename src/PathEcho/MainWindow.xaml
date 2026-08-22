@@ -19,9 +19,7 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <StackPanel Orientation="Horizontal">
-                    <Border Width="34" Height="34" CornerRadius="6" Background="#2BB58B">
-                        <TextBlock Text="↔" FontSize="20" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
+                    <Image Width="34" Height="34" Source="/Assets/PathEchoLogo.png"/>
                     <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="PathEcho" FontSize="18" FontWeight="SemiBold" Foreground="White"/>
                     </StackPanel>
@@ -29,17 +27,17 @@
 
                 <StackPanel Grid.Row="2">
                     <Button x:Name="SyncNavButton" Content="同步任务" Tag="Sync" Click="OnNavigate" Height="42" Margin="0,0,0,6"
-                            Foreground="White" Background="#2B3733" BorderBrush="#2B3733" HorizontalContentAlignment="Left"/>
+                            Style="{StaticResource SidebarNavButton}" Foreground="White" Background="#2B3733" BorderBrush="#2B3733"/>
                     <Button x:Name="GameNavButton" Content="游戏存档" Tag="Game" Click="OnNavigate" Height="42" Margin="0,0,0,6"
-                            Foreground="#D6DFDB" Background="Transparent" BorderBrush="Transparent" HorizontalContentAlignment="Left"/>
+                            Style="{StaticResource SidebarNavButton}"/>
                     <Button x:Name="HistoryNavButton" Content="版本历史" Tag="History" Click="OnNavigate" Height="42"
-                            Foreground="#D6DFDB" Background="Transparent" BorderBrush="Transparent" HorizontalContentAlignment="Left"/>
+                            Style="{StaticResource SidebarNavButton}"/>
                 </StackPanel>
 
                 <StackPanel Grid.Row="3">
                     <Separator Background="#35433E" Margin="0,0,0,10"/>
                     <Button x:Name="SettingsNavButton" Content="设置" Tag="Settings" Click="OnNavigate" Height="42"
-                            Foreground="#D6DFDB" Background="Transparent" BorderBrush="Transparent" HorizontalContentAlignment="Left"/>
+                            Style="{StaticResource SidebarNavButton}"/>
                     <TextBlock x:Name="SidebarVersionText" Foreground="#7F928A" FontSize="11" Margin="12,10,0,0"/>
                 </StackPanel>
             </Grid>
@@ -197,12 +195,51 @@
                         <TextBlock Text="更新" FontSize="16" FontWeight="SemiBold"/>
                         <CheckBox x:Name="UpdateCheck" Content="启动后在后台检查更新" Margin="0,12,0,2"/>
                         <TextBlock x:Name="SettingsVersionText" Foreground="{StaticResource MutedBrush}" Margin="0,4,0,12"/>
-                        <TextBlock Text="GitHub URL 前缀线路（可选）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
-                        <TextBox x:Name="UpdatePrefixBox"/>
-                        <TextBlock Text="第三方前缀线路会看到完整 GitHub 下载地址。" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,6,0,12"/>
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="更新线路" Foreground="{StaticResource MutedBrush}"/>
+                                <TextBlock Text="按优先级从高到低尝试，0 表示禁用。" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,4,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="添加前缀" Click="OnAddUpdateRoute"/>
+                            <Button x:Name="DeleteUpdateRouteButton" Grid.Column="3" Content="删除" Style="{StaticResource DangerButton}"
+                                    Click="OnDeleteUpdateRoute" IsEnabled="False"/>
+                        </Grid>
+                        <DataGrid x:Name="UpdateRoutesGrid" Height="176" Margin="0,0,0,6" RowHeight="42"
+                                  ItemsSource="{Binding UpdateRoutes, RelativeSource={RelativeSource AncestorType=Window}}"
+                                  SelectionChanged="OnUpdateRouteSelectionChanged">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="类型" Binding="{Binding Type}" IsReadOnly="True" Width="90" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTemplateColumn Header="地址" Width="*" MinWidth="280">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBox Text="{Binding BaseUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                     IsReadOnly="{Binding IsDirect}" BorderThickness="0" Background="Transparent"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn Header="优先级" Width="92">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox ItemsSource="{Binding UpdateRoutePriorities, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                      SelectedItem="{Binding Priority, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Text="第三方前缀线路会看到完整 GitHub 下载地址。直连线路始终保留，但可设为 0。"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,0,0,12"/>
                         <TextBlock Text="HTTP 出网代理（可选，仅 http://host:port）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
                         <TextBox x:Name="HttpProxyBox"/>
                         <Button Content="检查更新" Click="OnCheckForUpdates" HorizontalAlignment="Left" Margin="0,12,0,0"/>
+
+                        <Separator Margin="0,20"/>
+                        <TextBlock Text="诊断" FontSize="16" FontWeight="SemiBold"/>
+                        <CheckBox x:Name="DebugLogCheck" Content="启用 Debug 日志" Margin="0,12,0,2"/>
+                        <TextBlock Text="日志保存在当前用户的 PathEcho Logs 目录，最多保留 5 个滚动文件。"
+                                   Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,2,0,8"/>
+                        <Button Content="打开日志目录" Click="OnOpenLogs" HorizontalAlignment="Left"/>
 
                         <StackPanel Orientation="Horizontal" Margin="0,26,0,12">
                             <Button Content="保存设置" Style="{StaticResource PrimaryButton}" Click="OnSaveSettings"/>

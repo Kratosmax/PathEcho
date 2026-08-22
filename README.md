@@ -1,5 +1,7 @@
 # PathEcho
 
+<img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
+
 PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工具。它提供可回滚的同步、内容去重快照、事务回档、后台监听和签名自动更新。
 
 ## 下载与使用
@@ -8,10 +10,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.1.1-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.1.1-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.1.1-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.1.1-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.2.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.2.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.2.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.2.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 
@@ -20,9 +22,9 @@ Windows 11 build 22621 及以上会尝试全客户区 Acrylic 系统材质；DWM
 ### 主要流程
 
 1. 在“同步任务”中新建目录同步，选择单向、反向或双向，以及删除和冲突策略。
-2. 在“游戏存档”中设置存档目录、备份目录、保留版本数和定时/文件变化/游戏退出触发。
+2. 在“游戏存档”中设置存档目录、备份目录、保留版本数和定时/文件变化/游戏退出触发；游戏程序可从运行中的进程选择。
 3. 在“版本历史”中浏览普通目录快照，并按完整目录、变动文件或正则匹配文件事务回档。
-4. 在“设置”中管理当前用户开机自启、后台启动、默认备份目录、更新线路和 HTTP 出网代理。
+4. 在“设置”中管理当前用户开机自启、后台启动、默认备份目录、多条更新线路、HTTP 出网代理和 Debug 日志。
 
 配置、运行状态和更新缓存位于 `%LocalAppData%\PathEcho`，默认游戏备份位于 `%LocalAppData%\PathEcho\Backups`。安装版程序默认位于 `%LocalAppData%\Programs\PathEcho`。卸载不会删除配置和备份；需要彻底清理时，请先确认备份已另行保存，再手动处理数据目录。
 
@@ -30,12 +32,13 @@ Windows 11 build 22621 及以上会尝试全客户区 Acrylic 系统材质；DWM
 
 PathEcho 启动后可后台检查更新，也可在设置页手动检查。客户端先用内置 ECDSA P-256 公钥验证清单签名，再校验版本、通道、下载大小、SHA-256 和包结构；外部更新器会再次验签和验包，并用同卷暂存、备份、替换和失败回滚完成安装。Full 与 Lite 不跨通道更新，安装版更新时保留卸载器。
 
-更新支持直连、GitHub URL 前缀线路和独立 HTTP 出网代理。前缀线路会看到完整 GitHub 下载地址；无论使用哪条线路，签名、哈希、版本、通道、重定向和包结构检查都不会被跳过。
+更新支持直连、多条 GitHub URL 前缀线路和独立 HTTP 出网代理。线路按 0 到 10 的优先级从高到低尝试，0 表示禁用；直连线路不可删除但可禁用。前缀线路会看到完整 GitHub 下载地址；无论使用哪条线路，签名、哈希、版本、通道、重定向和包结构检查都不会被跳过。
 
 常见问题：
 
 - Lite 无法启动：安装 .NET 8 Desktop Runtime x64，或改用 Full 包。
 - 更新检查失败：在设置中检查 URL 前缀线路和 HTTP 出网代理；也可从 Release 页面手动覆盖安装。
+- 需要排查问题：在设置中启用 Debug 日志，日志写入 `%LocalAppData%\PathEcho\Logs`，最多保留 5 个滚动文件。
 - 回档提示文件占用：先正常退出游戏；需要结束进程时，PathEcho 会核对 PID 与启动时间并拒绝系统关键进程、自身进程和身份变化进程。
 
 ## 自行编译
