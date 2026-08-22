@@ -25,7 +25,7 @@ dotnet --version
 - 标签、Actions 和 Release 尚未创建或在线核验。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret、推送 `v0.1.0` 标签并发布首版。
-- 初始实现和本接续文件均需推送后才可宣称跨设备接续完整。
+- 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
 
 ## 已实现
 
@@ -41,10 +41,9 @@ dotnet --version
 
 ## 当前待办
 
-1. 提交并推送本次接续快照。
-2. 创建并推送 `v0.1.0`，等待 Release Actions 成功。
-3. 核验线上 8 个资产、清单验签、SHA256、latest 路由和下载包。
-4. 发布完成后把标签、Actions、Release 和线上核验结果写回本文，再提交推送收尾文档。
+1. 创建并推送 `v0.1.0`，等待 Release Actions 成功。
+2. 核验线上 8 个资产、清单验签、SHA256、latest 路由和下载包。
+3. 发布完成后把标签、Actions、Release 和线上核验结果写回本文，再提交推送收尾文档。
 
 ## 关键入口
 
