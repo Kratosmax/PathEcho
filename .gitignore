@@ -1,0 +1,9 @@
+temp/
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.pem
+*.pfx
+*.snk

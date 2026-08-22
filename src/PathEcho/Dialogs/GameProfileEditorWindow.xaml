@@ -1,0 +1,62 @@
+<Window x:Class="PathEcho.Dialogs.GameProfileEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="添加游戏存档" Width="680" Height="720" MinWidth="620"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="24">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <TextBlock Text="添加游戏存档" FontSize="22" FontWeight="SemiBold"/>
+            <StackPanel Grid.Row="1" Margin="0,18,0,0">
+                <TextBlock Text="游戏名称" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <TextBox x:Name="NameBox"/>
+            </StackPanel>
+            <StackPanel Grid.Row="2" Margin="0,14,0,0">
+                <TextBlock Text="存档目录" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBox x:Name="SavePathBox"/><Button Grid.Column="2" Content="浏览" Click="OnBrowseSave"/>
+                </Grid>
+            </StackPanel>
+            <StackPanel Grid.Row="3" Margin="0,14,0,0">
+                <TextBlock Text="单独备份目录（留空使用默认目录）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBox x:Name="BackupPathBox"/><Button Grid.Column="2" Content="浏览" Click="OnBrowseBackup"/>
+                </Grid>
+            </StackPanel>
+            <StackPanel Grid.Row="4" Margin="0,18,0,0">
+                <TextBlock Text="备份触发" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                <WrapPanel>
+                    <CheckBox x:Name="ScheduledCheck" Content="定时备份" Margin="0,0,22,0"/>
+                    <CheckBox x:Name="ImportantCheck" Content="重点文件变化" Margin="0,0,22,0"/>
+                    <CheckBox x:Name="ChangedCheck" Content="文件变化" IsChecked="True" Margin="0,0,22,0"/>
+                    <CheckBox x:Name="ProcessCheck" Content="游戏退出"/>
+                </WrapPanel>
+            </StackPanel>
+            <Grid Grid.Row="5" Margin="0,14,0,0">
+                <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/><ColumnDefinition Width="12"/><ColumnDefinition/></Grid.ColumnDefinitions>
+                <StackPanel><TextBlock Text="定时间隔（分钟）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/><TextBox x:Name="ScheduleBox" Text="60"/></StackPanel>
+                <StackPanel Grid.Column="2"><TextBlock Text="最低间隔（分钟）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/><TextBox x:Name="MinimumBox" Text="5"/></StackPanel>
+                <StackPanel Grid.Column="4"><TextBlock Text="保留版本" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/><TextBox x:Name="VersionsBox" Text="50"/></StackPanel>
+            </Grid>
+            <StackPanel Grid.Row="6" Margin="0,14,0,0">
+                <TextBlock Text="重点文件正则表达式（每行一个）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <TextBox x:Name="PatternsBox" Height="64" AcceptsReturn="True" VerticalContentAlignment="Top"/>
+            </StackPanel>
+            <StackPanel Grid.Row="7" Margin="0,14,0,0">
+                <TextBlock Text="游戏程序（用于退出后备份）" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                    <TextBox x:Name="ProcessPathBox"/><Button Grid.Column="2" Content="浏览" Click="OnBrowseProcess"/>
+                </Grid>
+                <TextBlock x:Name="ErrorText" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+            </StackPanel>
+            <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+                <Button Content="取消" IsCancel="True" Margin="0,0,8,0"/>
+                <Button Content="添加" Style="{StaticResource PrimaryButton}" Click="OnCreate"/>
+            </StackPanel>
+        </Grid>
+    </ScrollViewer>
+</Window>

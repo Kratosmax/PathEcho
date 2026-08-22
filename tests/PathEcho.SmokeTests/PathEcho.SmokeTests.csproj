@@ -1,0 +1,16 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PathEcho.Core\PathEcho.Core.csproj" />
+    <ProjectReference Include="..\..\src\PathEcho.Platform.Windows\PathEcho.Platform.Windows.csproj" />
+    <ProjectReference Include="..\..\src\PathEcho.Updater\PathEcho.Updater.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

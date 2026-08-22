@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.424
+      - name: Install Inno Setup
+        shell: powershell
+        run: choco install innosetup --yes --no-progress
+      - name: Restore
+        shell: powershell
+        run: dotnet restore PathEcho.sln -m:1
+      - name: Build release assets
+        shell: powershell
+        env:
+          PATHECHO_UPDATE_PRIVATE_KEY: ${{ secrets.PATHECHO_UPDATE_PRIVATE_KEY }}
+        run: |
+          $key = Join-Path $env:RUNNER_TEMP "pathecho-update-private.pem"
+          try {
+            [IO.File]::WriteAllText($key, $env:PATHECHO_UPDATE_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
+            .\build\Build-Release.ps1 -PrivateKeyPath $key -ExpectedTag $env:GITHUB_REF_NAME
+          } finally {
+            Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
+          }
+      - name: Publish GitHub Release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem temp/release -File | Select-Object -ExpandProperty FullName
+          gh release create $env:GITHUB_REF_NAME $assets --verify-tag --title "PathEcho $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES_CURRENT.md
