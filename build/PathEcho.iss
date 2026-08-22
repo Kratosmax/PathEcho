@@ -57,7 +57,7 @@ var
   Index: Integer;
 begin
   Result := False;
-  if RegGetSubkeyNames(RootKey, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App', Versions) then
+  if RegGetValueNames(RootKey, 'SOFTWARE\dotnet\Setup\InstalledVersions\x64\sharedfx\Microsoft.WindowsDesktop.App', Versions) then
     for Index := 0 to GetArrayLength(Versions) - 1 do
       if Pos('8.', Versions[Index]) = 1 then
       begin
@@ -70,7 +70,8 @@ function InitializeSetup(): Boolean;
 var
   ErrorCode: Integer;
 begin
-  Result := HasDesktopRuntime8(HKLM64) or HasDesktopRuntime8(HKCU64);
+  Result := HasDesktopRuntime8(HKLM64) or HasDesktopRuntime8(HKLM32) or
+    HasDesktopRuntime8(HKCU64) or HasDesktopRuntime8(HKCU32);
   if not Result then
   begin
     MsgBox('PathEcho Lite 需要 .NET 8 Desktop Runtime x64。安装运行时后请重新运行本安装包。', mbError, MB_OK);

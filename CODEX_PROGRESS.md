@@ -18,7 +18,7 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-22，Asia/Shanghai。
-- 版本：`0.2.1`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 版本：`0.2.2`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
 - 分支：`main`；`0.2.1` 发布代码基线为 `f3506aff4f7271495f160b7fd6e859a17949b4e0`，正式 `v0.2.1` 标签固定指向该提交；发布核验文档提交位于标签之后，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
@@ -41,6 +41,7 @@ dotnet --version
 - Full/Lite 同通道更新，包含 URL 前缀线路、HTTP 出网代理、稳定故障转移、重定向 allowlist、下载大小与停滞限制、失败暂存清理、包结构与路径穿越检查。
 - 安装目录 marker、外部 launcher、PID 身份等待、事务 stage/backup/rollback、重启交接和安装版卸载器保留。
 - Full Setup、Lite Setup、Full ZIP、Lite ZIP、兼容/通道清单、SHA256 文件和标签触发的 GitHub Actions 发布链。
+- Lite Setup 在 32 位与 64 位注册表视图中读取 `InstalledVersions\x64` 的 Desktop Runtime 版本值，避免把版本值误当子项或漏掉官方 x64 登记位置。
 - 新建同步任务和游戏存档的 WPF 绑定集合写入统一切回 Dispatcher，修复跨线程创建错误。
 - 游戏程序可从运行中进程选择，支持程序名、PID、窗口标题和路径搜索，持久化仍只保存可执行路径。
 - 更新设置支持多条 URL 前缀、直连兜底、0 到 10 优先级与 0 禁用；HTTP 出网代理继续独立配置。
@@ -50,7 +51,8 @@ dotnet --version
 
 ## 当前待办
 
-- `0.2.1` 双击闪退与运行时一致性修复、提交、推送、云端构建、签名发布和线上资产核验均已完成，当前没有已授权但未完成的代码任务。
+- `0.2.2` Lite Setup 运行时误判修复已获修改、提交、推送和发布授权；本地回归与真实安装器测试已完成，待云端签名发布与线上资产核验。正式 `v0.2.1` 不得覆盖或移动。
+- `0.2.1` 双击闪退与运行时一致性修复、提交、推送、云端构建、签名发布和线上资产核验均已完成。
 - 本机直连 `releases/latest/download/update-lite.json` 与 `update-full.json` 在 15 秒连接阶段超时，因此没有独立证明网页 latest 重定向链；GitHub latest API 已指向 `v0.2.1`，且通过 GitHub CLI 下载的该 Release 清单与 API digest 一致。后续在直连 GitHub 正常的网络环境补测即可，不得把本机超时描述成服务端 404。
 - 上一正式版 `v0.2.0` 原始 Lite 客户端已接受 `0.2.1` Lite 候选包；旧 Full 原包因本机直连过慢未完成下载，因此旧 Full 完整自动升级链仍未验证。该边界不影响已完成的 Full 清单验签、资产 digest、SHA256 和包结构交叉核验。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。发布工作流已按官方最新稳定版本升级到 `checkout@v7` 与 `setup-dotnet@v6`。
@@ -73,6 +75,11 @@ dotnet --version
 
 2026-08-22 实际通过：
 
+- 本轮安装器修复：系统 `dotnet --list-runtimes` 已确认 `Microsoft.WindowsDesktop.App 8.0.30 x64` 存在；实际登记位于 32 位注册表视图，版本 `8.0.30` 是值名而非子项。Lite Setup 改用 `RegGetValueNames` 并覆盖 `HKLM64/HKLM32/HKCU64/HKCU32`。
+- `0.2.2` Release 配置构建 0 警告、0 错误；SmokeTests 16/16 通过，新增 Lite 安装器运行时检测契约；全解决方案 `dotnet format --verify-no-changes` 通过。
+- `0.2.2` 本地 Lite 预览包 `temp/preview/PathEcho-0.2.2-Lite.zip`：454347 字节，SHA-256 `0027294A15654A9A447EA03996C75C002FD0BDEFB4D3C91754FA9791C22646B8`；候选包内更新器 `--verify-only` 返回 0，程序集、`version.txt` 和通道均为 `0.2.2/Lite`。本地预览不是正式 Release。
+- Inno Setup 6.7.3 成功编译 `temp/installer-test-0.2.2/PathEcho-0.2.2-Lite-Setup-Test.exe`：2284514 字节，SHA-256 `FCBB194BE3C9E899B4642F78BF492B61AA33597E3739ABE5CF39F56F91CFD4F5`。
+- 真实 Lite Setup 在已安装 `.NET 8.0.30 Desktop Runtime x64` 的系统中静默安装到隔离测试目录并通过，安装器与卸载器退出码均为 0；入口、运行配置和卸载器存在，卸载后目录与 HKCU 卸载登记均已清理。
 - 本轮修复：全局只读 `DataGrid` 阻止 WPF 向只读行模型执行 TwoWay 回写；同步表双击仅接受真实数据行，运行进程表双击同样限制到数据行。
 - 本轮运行时加固：手动/后台同步共享完整基线事务锁，手动/后台游戏备份共享服务锁；配置增删改先持久化再切换内存状态；监听启动失败隔离；备份目录迁移失败使用不可取消令牌回滚；未知 UI 异常强制落日志并等待清理后退出。
 - `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误。
@@ -105,7 +112,6 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 - Inno Setup 6.7.3 已成功编译带新 Logo 的 `temp/installer-test/PathEcho-0.2.0-Lite-Setup-Test.exe`。
 - `0.1.1` 补丁改动后再次完成 Release 构建 0 警告、0 错误和 SmokeTests 13/13。
 - Full/Lite 最终 ZIP 均通过对应更新器 `--verify-only` 的哈希、版本、通道和结构预检。
-- 本机未安装全局 .NET 8 Desktop Runtime，Lite Setup 正确阻止安装并给出依赖提示。
 - Full Setup 完成静默安装、签名清单与包二次验证、外部更新器替换、预览重启截图、卸载器保留和静默卸载；三个进程退出码均为 0，测试安装目录与卸载登记已清理。
 - UI 已核验设置页、同步页、常用尺寸、920×620 最小尺寸和强制不透明回退；证据位于忽略提交的 `temp/ui` 与 `temp/e2e`。
 - `0.1.1` 本地 Lite 预览包为 `temp/preview/PathEcho-0.1.1-Lite.zip`，390235 字节，SHA-256 `0F05CDE5C4C542FD9C16BE2F278AC18C5CF34471AE590491EDBB3B3D0AD075BF`；更新器预检与真实设置页截图通过。

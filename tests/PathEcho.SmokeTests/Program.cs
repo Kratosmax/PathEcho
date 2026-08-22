@@ -24,6 +24,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("目录变化可合并触发自动同步", TestSyncMonitorAsync),
     ("同一任务并发同步会串行更新基线", TestSyncTaskRunnerSerializationAsync),
     ("只读表格不会进入编辑模式", TestReadOnlyDataGridContractAsync),
+    ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
     ("Restart Manager 可识别占用且保护当前进程", TestRestartManagerAsync),
@@ -54,6 +55,26 @@ catch (Exception exception)
 finally
 {
     DeleteTree(testRoot);
+}
+
+Task TestLiteInstallerRuntimeDetectionContractAsync()
+{
+    var installerPath = Path.Combine(Environment.CurrentDirectory, "build", "PathEcho.iss");
+    if (!File.Exists(installerPath))
+    {
+        installerPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "PathEcho.iss"));
+    }
+
+    var installer = File.ReadAllText(installerPath);
+
+    True(installer.Contains("RegGetValueNames", StringComparison.Ordinal), "Lite 安装器未枚举 .NET 运行时版本值名。");
+    False(installer.Contains("RegGetSubkeyNames", StringComparison.Ordinal), "Lite 安装器仍把 .NET 运行时版本误当成注册表子项。");
+    foreach (var root in new[] { "HKLM64", "HKLM32", "HKCU64", "HKCU32" })
+    {
+        True(installer.Contains($"HasDesktopRuntime8({root})", StringComparison.Ordinal), $"Lite 安装器未检查 {root} 注册表视图。");
+    }
+
+    return Task.CompletedTask;
 }
 
 async Task TestConfigurationStoreAsync()
