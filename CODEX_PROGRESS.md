@@ -19,11 +19,13 @@ dotnet --version
 
 - 最后核验：2026-08-22，Asia/Shanghai。
 - 版本：`0.1.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`，本地仓库尚无提交。
-- 远程：未配置；GitHub 仓库、标签、Actions 和 Release 尚未创建或在线核验。
+- 分支：`main`；初始实现提交为 `39e08ec26bca632d280baf5f50e8cf25d6a24622`。
+- 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 已核验与初始实现提交一致。
+- GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
+- 标签、Actions 和 Release 尚未创建或在线核验。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret、推送 `v0.1.0` 标签并发布首版。
-- 工作区包含完整初始实现；在提交并推送前不得宣称已可跨设备接续。
+- 初始实现和本接续文件均需推送后才可宣称跨设备接续完整。
 
 ## 已实现
 
@@ -39,11 +41,10 @@ dotnet --version
 
 ## 当前待办
 
-1. 完成本地提交前的暂存 diff、敏感信息和生成物复核。
-2. 恢复 GitHub CLI 登录，创建公开仓库 `Kratosmax/PathEcho` 并推送 `main`。
-3. 将正式更新签名私钥写入仓库 Secret `PATHECHO_UPDATE_PRIVATE_KEY`，确认 Secret 后删除本地临时私钥。
-4. 推送 `v0.1.0`，等待 Release Actions 成功并核验线上 8 个资产、清单验签、SHA256、latest 路由和下载包。
-5. 发布完成后把 remote、提交、标签、Actions、Release 和线上核验结果写回本文，再提交推送收尾文档。
+1. 提交并推送本次接续快照。
+2. 创建并推送 `v0.1.0`，等待 Release Actions 成功。
+3. 核验线上 8 个资产、清单验签、SHA256、latest 路由和下载包。
+4. 发布完成后把标签、Actions、Release 和线上核验结果写回本文，再提交推送收尾文档。
 
 ## 关键入口
 
