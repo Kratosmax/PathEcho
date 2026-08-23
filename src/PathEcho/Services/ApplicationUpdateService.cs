@@ -41,6 +41,7 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
 
     public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
     {
+        CleanupStaleUpdateCache();
         var currentVersion = CurrentVersion;
         var channel = ReadChannel();
         if (channel is null || !File.Exists(Path.Combine(AppContext.BaseDirectory, ".pathecho-install-root")))
@@ -96,8 +97,10 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
             JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = true }),
             cancellationToken).ConfigureAwait(false);
 
-        var launcher = PrepareLauncher(updateRoot);
+        var launcher = await PrepareLauncherAsync(updateRoot, cancellationToken).ConfigureAwait(false);
         var resultPath = Path.Combine(updateRoot, $"result-{manifest.Version}-{Guid.NewGuid():N}.json");
+        var handoffReadyPath = resultPath + ".handoff-ready";
+        TryDeleteFile(handoffReadyPath);
         var process = Process.GetCurrentProcess();
         var start = new ProcessStartInfo(Path.Combine(launcher, "PathEcho.Updater.exe"))
         {
@@ -113,6 +116,7 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
             "--pid", Environment.ProcessId.ToString(),
             "--process-start-filetime", process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString(),
             "--result", resultPath,
+            "--handoff-ready", handoffReadyPath,
         })
         {
             start.ArgumentList.Add(argument);
@@ -121,13 +125,8 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
         cancellationToken.ThrowIfCancellationRequested();
         handoffStarting?.Invoke();
         using var updaterProcess = Process.Start(start) ?? throw new InvalidOperationException("无法启动外部更新器。");
-        await Task.Delay(TimeSpan.FromMilliseconds(750)).ConfigureAwait(false);
-        if (updaterProcess.HasExited)
-        {
-            var detail = TryReadUpdateFailure(resultPath);
-            throw new InvalidOperationException(
-                $"外部更新器启动后立即退出（代码 {updaterProcess.ExitCode}）。{detail}");
-        }
+        await WaitForUpdaterHandoffAsync(updaterProcess, handoffReadyPath, resultPath).ConfigureAwait(false);
+        TryDeleteFile(handoffReadyPath);
     }
 
     public void Dispose() => _httpClient.Dispose();
@@ -145,26 +144,150 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
         }
     }
 
-    private static string PrepareLauncher(string updateRoot)
+    private static async Task WaitForUpdaterHandoffAsync(Process updaterProcess, string handoffReadyPath, string resultPath)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (File.Exists(handoffReadyPath))
+            {
+                return;
+            }
+
+            if (updaterProcess.HasExited)
+            {
+                var detail = TryReadUpdateFailure(resultPath);
+                throw new InvalidOperationException(
+                    $"外部更新器在交接前退出（代码 {updaterProcess.ExitCode}）。{detail}");
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
+        }
+
+        try
+        {
+            updaterProcess.Kill(entireProcessTree: true);
+            await updaterProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        throw new TimeoutException("外部更新器在 10 秒内未完成启动握手，现有安装未修改。");
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static async Task<string> PrepareLauncherAsync(string updateRoot, CancellationToken cancellationToken)
     {
         var launcher = Path.Combine(updateRoot, "launcher", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(launcher);
-        var updaterFiles = Directory.EnumerateFiles(AppContext.BaseDirectory)
-            .Where(file =>
-                Path.GetFileName(file).StartsWith("PathEcho.Updater", StringComparison.OrdinalIgnoreCase) ||
-                Path.GetFileName(file).StartsWith("PathEcho.Core", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-        if (!updaterFiles.Any(file => string.Equals(Path.GetFileName(file), "PathEcho.Updater.exe", StringComparison.OrdinalIgnoreCase)))
+        try
         {
-            throw new InvalidOperationException("安装目录缺少 PathEcho 更新器。");
+            var updaterFiles = Directory.EnumerateFiles(AppContext.BaseDirectory)
+                .Where(file =>
+                    Path.GetFileName(file).StartsWith("PathEcho.Updater", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetFileName(file).StartsWith("PathEcho.Core", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (!updaterFiles.Any(file => string.Equals(Path.GetFileName(file), "PathEcho.Updater.exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("安装目录缺少 PathEcho 更新器。");
+            }
+
+            foreach (var file in updaterFiles)
+            {
+                await UpdateFileOperation.RetryAsync(
+                    "准备外部更新器",
+                    file,
+                    () => File.Copy(file, Path.Combine(launcher, Path.GetFileName(file)), false),
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            return launcher;
+        }
+        catch
+        {
+            TryDeleteTree(launcher);
+            throw;
+        }
+    }
+
+    private static void TryDeleteTree(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, true);
+            }
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void CleanupStaleUpdateCache()
+    {
+        var updateRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PathEcho",
+            "Update");
+        if (!Directory.Exists(updateRoot))
+        {
+            return;
         }
 
-        foreach (var file in updaterFiles)
+        var now = DateTime.UtcNow;
+        var launcherRoot = Path.Combine(updateRoot, "launcher");
+        if (Directory.Exists(launcherRoot))
         {
-            File.Copy(file, Path.Combine(launcher, Path.GetFileName(file)), false);
+            foreach (var directory in Directory.EnumerateDirectories(launcherRoot))
+            {
+                try
+                {
+                    if (Directory.GetLastWriteTimeUtc(directory) < now.AddHours(-1))
+                    {
+                        TryDeleteTree(directory);
+                    }
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
         }
 
-        return launcher;
+        foreach (var file in Directory.EnumerateFiles(updateRoot, "*", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileName(file);
+            var isManagedCache = name.StartsWith("PathEcho-", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("update-", StringComparison.OrdinalIgnoreCase) ||
+                name.StartsWith("result-", StringComparison.OrdinalIgnoreCase) ||
+                name.EndsWith(".download", StringComparison.OrdinalIgnoreCase);
+            if (!isManagedCache)
+            {
+                continue;
+            }
+
+            try
+            {
+                if (File.GetLastWriteTimeUtc(file) < now.AddDays(-30))
+                {
+                    TryDeleteFile(file);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private static string? ReadChannel()

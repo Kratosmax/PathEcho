@@ -33,6 +33,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("未保存编辑在关闭或离开页面前会确认", TestUnsavedChangesContractAsync),
     ("失败的界面操作不会覆盖成成功状态", TestUiActionResultContractAsync),
     ("重复启动会激活主实例且不会错误释放锁", TestSingleInstanceCoordinatorAsync),
+    ("更新事务锁可跨线程安全交接且阻止并发更新", TestUpdateTransactionGateAsync),
+    ("更新文件操作可等待短暂占用并报告长期占用路径", TestUpdateFileOperationAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
@@ -44,6 +46,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("更新下载可故障转移并清理失败暂存", TestUpdatePackageDownloadAsync),
     ("更新器拒绝路径穿越包", TestUpdaterPackageValidationAsync),
     ("更新交接会复制依赖、握手并记录失败", TestUpdateHandoffContractAsync),
+    ("正式构建会用包内更新器验证两种通道", TestReleasePackageVerificationContractAsync),
 };
 
 try
@@ -418,6 +421,66 @@ async Task TestSingleInstanceCoordinatorAsync()
 
     using var reopened = SingleInstanceCoordinator.Create(instanceName, () => { });
     True(reopened.IsPrimary, "主实例退出后无法重新获得单实例锁。");
+}
+
+async Task TestUpdateTransactionGateAsync()
+{
+    var name = $"Local\\PathEcho.UpdateGate.Test.{Guid.NewGuid():N}";
+    using var updater = UpdateTransactionGate.BeginAcquire(name, TimeSpan.Zero);
+    True(updater.IsAcquired, "更新器没有取得独占事务锁。");
+
+    using var blocked = UpdateTransactionGate.BeginAcquire(name, TimeSpan.Zero);
+    False(blocked.IsAcquired, "并发更新器错误取得了已占用的事务锁。");
+
+    var waiting = UpdateTransactionGate.BeginAcquire(name, TimeSpan.FromSeconds(5));
+    await Task.Delay(100);
+    updater.Dispose();
+    True(waiting.IsAcquired, "前一个事务结束后等待的更新器没有接管锁。");
+    waiting.Dispose();
+
+    using var reopened = UpdateTransactionGate.BeginAcquire(name, TimeSpan.Zero);
+    True(reopened.IsAcquired, "更新完成后事务锁没有释放。");
+}
+
+async Task TestUpdateFileOperationAsync()
+{
+    var directory = Path.Combine(testRoot, "update-file-operation");
+    Directory.CreateDirectory(directory);
+    var source = Path.Combine(directory, "source.bin");
+    var destination = Path.Combine(directory, "destination.bin");
+    await File.WriteAllTextAsync(source, "PathEcho");
+
+    var transientLock = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None);
+    var release = Task.Run(async () =>
+    {
+        await Task.Delay(150);
+        transientLock.Dispose();
+    });
+    await UpdateFileOperation.RetryAsync(
+        "复制测试文件",
+        source,
+        () => File.Copy(source, destination, false),
+        maximumAttempts: 8,
+        retryDelay: TimeSpan.FromMilliseconds(50));
+    await release;
+    Equal("PathEcho", await File.ReadAllTextAsync(destination), "短暂占用释放后文件操作没有成功。");
+
+    using var persistentLock = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None);
+    try
+    {
+        await UpdateFileOperation.RetryAsync(
+            "复制测试文件",
+            source,
+            () => File.Copy(source, destination, true),
+            maximumAttempts: 2,
+            retryDelay: TimeSpan.FromMilliseconds(10));
+        throw new InvalidOperationException("长期文件占用没有让更新操作失败。");
+    }
+    catch (UpdateFileAccessException exception)
+    {
+        Equal("复制测试文件", exception.Stage, "文件占用错误丢失了更新阶段。");
+        Equal(source, exception.AffectedPath, "文件占用错误丢失了具体路径。");
+    }
 }
 
 async Task TestSyncFiltersAndPreviewAsync()
@@ -904,15 +967,26 @@ async Task TestUpdateHandoffContractAsync()
 {
     var service = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Services", "ApplicationUpdateService.cs"));
     True(service.Contains("StartsWith(\"PathEcho.Core\"", StringComparison.Ordinal), "更新 launcher 没有复制更新器依赖。");
-    True(service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750)", StringComparison.Ordinal), "主程序退出前没有等待更新器启动握手。");
-    True(!service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken)", StringComparison.Ordinal), "更新器启动后的握手仍可被 UI 取消并遗留等待进程。");
+    True(service.Contains("UpdateFileOperation.RetryAsync(", StringComparison.Ordinal), "更新 launcher 没有处理短暂文件占用。");
+    True(service.Contains("TryDeleteTree(launcher)", StringComparison.Ordinal), "更新 launcher 复制失败会留下半成品目录。");
+    True(service.Contains("CleanupStaleUpdateCache();", StringComparison.Ordinal), "启动检查不会清理过期更新缓存。");
+    False(service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750)", StringComparison.Ordinal), "主程序仍使用固定延时伪装更新器握手。");
+    True(service.Contains("WaitForUpdaterHandoffAsync", StringComparison.Ordinal), "主程序退出前没有等待更新器落盘握手。");
     True(service.Contains("cancellationToken.ThrowIfCancellationRequested();", StringComparison.Ordinal), "启动外部更新器前没有最后检查取消请求。");
     True(service.Contains("handoffStarting?.Invoke();", StringComparison.Ordinal), "更新窗口无法进入不可取消的交接状态。");
     True(service.Contains("updaterProcess.HasExited", StringComparison.Ordinal), "主程序没有识别更新器立即退出。");
     True(service.Contains("\"--result\", resultPath", StringComparison.Ordinal), "主程序没有向更新器传递结果文件。");
+    True(service.Contains("\"--handoff-ready\", handoffReadyPath", StringComparison.Ordinal), "主程序没有向更新器传递握手文件。");
 
     var updater = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho.Updater", "Program.cs"));
     True(updater.Contains("TryWriteResult(resultPath, \"failed\"", StringComparison.Ordinal), "更新器失败时没有持久化结果。");
+    True(updater.Contains("TryWriteFailureLog(exception)", StringComparison.Ordinal), "更新失败在结果消费后没有保留诊断日志。");
+    True(updater.Contains("UpdateFileOperation.RetryAsync(\"备份当前安装目录\"", StringComparison.Ordinal), "安装目录替换没有处理短暂文件占用。");
+    True(updater.Contains("UpdateTransactionGate.UpdaterMutexName", StringComparison.Ordinal), "并发更新器之间没有互斥。");
+    var handoffSignal = updater.IndexOf("WriteStateSignal(handoffReadyPath", StringComparison.Ordinal);
+    var parentWait = updater.IndexOf("await WaitForVerifiedProcessExitAsync", StringComparison.Ordinal);
+    var updaterHash = updater.LastIndexOf("await VerifyHashAsync(package", StringComparison.Ordinal);
+    True(handoffSignal >= 0 && parentWait > handoffSignal && updaterHash > parentWait, "更新器没有先握手、再等待旧进程、最后二次验包。");
     True(
         updater.Contains("installValidated &&", StringComparison.Ordinal) &&
         updater.Contains("parentExited &&", StringComparison.Ordinal),
@@ -927,6 +1001,9 @@ async Task TestUpdateHandoffContractAsync()
 
     var app = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "App.xaml.cs"));
     True(app.Contains("SignalUpdateReady(e.Args)", StringComparison.Ordinal), "新版完成初始化后没有报告就绪。");
+    True(app.Contains("HasTrustedUpdateHandoff(e.Args)", StringComparison.Ordinal), "主程序没有区分普通启动与可信更新交接。");
+    True(app.Contains("UpdateTransactionGate.UpdaterMutexName", StringComparison.Ordinal), "普通启动没有探测正在运行的更新器。");
+    False(app.Contains("private UpdateTransactionGate?", StringComparison.Ordinal), "主程序生命周期错误持有更新器独占锁，会破坏正常重复启动。");
     True(app.Contains("AppLogger.Critical(\"Unable to read update result.\"", StringComparison.Ordinal), "更新结果损坏时可能在 Debug 关闭状态下静默失败。");
     True(app.Contains("PathEcho 更新结果不可用", StringComparison.Ordinal), "更新结果损坏时没有可见反馈。");
     True(app.Contains("Unable to delete consumed update result.", StringComparison.Ordinal), "结果清理失败与结果解析失败没有分离处理。");
@@ -943,6 +1020,15 @@ async Task TestUpdateHandoffContractAsync()
     True(File.Exists(resultPath), "真实更新器失败后没有写入结果文件。");
     using var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultPath));
     Equal("failed", result.RootElement.GetProperty("Status").GetString() ?? string.Empty, "更新失败结果状态无效。");
+}
+
+Task TestReleasePackageVerificationContractAsync()
+{
+    var releaseScript = File.ReadAllText(Path.Combine(repositoryRoot, "build", "Build-Release.ps1"));
+    True(releaseScript.Contains("$packagedUpdater --package $zip", StringComparison.Ordinal), "正式构建没有调用包内更新器验证候选 ZIP。");
+    True(releaseScript.Contains("--channel $channel --version $version --verify-only true", StringComparison.Ordinal), "候选 ZIP 验证没有核对通道和版本。");
+    True(releaseScript.Contains("package updater verification failed", StringComparison.Ordinal), "候选 ZIP 验证失败不会阻断 Release。");
+    return Task.CompletedTask;
 }
 
 static void True(bool condition, string message)

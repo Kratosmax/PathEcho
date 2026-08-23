@@ -46,6 +46,10 @@ foreach ($channel in @("Lite", "Full")) {
 
     $zip = Join-Path $resolvedRelease "PathEcho-$version-$channel.zip"
     Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
+    $packageHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+    $packagedUpdater = Join-Path $packageRoot "PathEcho.Updater.exe"
+    & $packagedUpdater --package $zip --sha256 $packageHash --channel $channel --version $version --verify-only true
+    if ($LASTEXITCODE -ne 0) { throw "$channel package updater verification failed." }
     $setupBase = "PathEcho-$version-$channel-Setup"
     & $IsccPath "/DAppVersion=$version" "/DChannel=$channel" "/DSourceDir=$packageRoot" "/DOutputDir=$resolvedRelease" "/DOutputBaseFilename=$setupBase" (Join-Path $repository "build\PathEcho.iss")
     if ($LASTEXITCODE -ne 0) { throw "$channel setup build failed." }

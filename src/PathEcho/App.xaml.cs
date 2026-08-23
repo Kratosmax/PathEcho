@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using PathEcho.Core.Update;
 using PathEcho.Platform.Windows.Instance;
 using PathEcho.Services;
 using Forms = System.Windows.Forms;
@@ -26,6 +27,23 @@ public partial class App : System.Windows.Application
     private async void OnStartup(object sender, StartupEventArgs e)
     {
         var previewMode = e.Args.Contains("--preview", StringComparer.OrdinalIgnoreCase);
+        if (!previewMode && !HasTrustedUpdateHandoff(e.Args))
+        {
+            using var updateGate = UpdateTransactionGate.BeginAcquire(
+                UpdateTransactionGate.UpdaterMutexName,
+                TimeSpan.Zero);
+            if (!updateGate.IsAcquired)
+            {
+                System.Windows.MessageBox.Show(
+                    "PathEcho 正在完成更新，请等待更新结果窗口出现后再启动。",
+                    "PathEcho 正在更新",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                Shutdown();
+                return;
+            }
+        }
+
         var instanceName = previewMode
             ? $"Local\\PathEcho.Preview.{Environment.ProcessId}"
             : "Local\\PathEcho.SingleInstance";
@@ -189,6 +207,23 @@ public partial class App : System.Windows.Application
         }
 
         return path;
+    }
+
+    private static bool HasTrustedUpdateHandoff(string[] arguments)
+    {
+        try
+        {
+            var resultPath = GetUpdateStatePath(arguments, "--update-result");
+            var readyPath = GetUpdateStatePath(arguments, "--update-ready");
+            return resultPath is not null &&
+                readyPath is not null &&
+                string.Equals(readyPath, resultPath + ".ready", StringComparison.OrdinalIgnoreCase) &&
+                Path.GetFileName(resultPath).StartsWith("result-", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
     }
 
     private void RequestMainWindowActivation()

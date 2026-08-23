@@ -8,6 +8,7 @@ string? resultPath = null;
 string? target = null;
 var installValidated = false;
 var parentExited = false;
+UpdateTransactionGate? updaterGate = null;
 try
 {
     var options = ParseArguments(args);
@@ -29,7 +30,6 @@ try
         installValidated = true;
     }
 
-    UpdateManifest? manifest = null;
     string expectedHash;
     string expectedChannel;
     string expectedVersion;
@@ -43,40 +43,61 @@ try
     {
         var manifestPath = RequirePath(options, "manifest");
         expectedChannel = RequireValue(options, "channel");
-        manifest = await UpdateManifestVerifier.ReadAndVerifyAsync(manifestPath, expectedChannel);
+        var manifest = await UpdateManifestVerifier.ReadAndVerifyAsync(manifestPath, expectedChannel);
         expectedHash = manifest.Sha256.ToUpperInvariant();
         expectedVersion = manifest.Version;
     }
 
-    await VerifyHashAsync(package, expectedHash);
-    UpdatePackageValidator.Validate(package, expectedChannel, expectedVersion);
     if (verifyOnly)
     {
+        await VerifyHashAsync(package, expectedHash);
+        UpdatePackageValidator.Validate(package, expectedChannel, expectedVersion);
         return 0;
     }
 
     var processId = int.Parse(RequireValue(options, "pid"));
     var processStartedAt = long.Parse(RequireValue(options, "process-start-filetime"));
     var previewRestart = options.TryGetValue("preview-restart", out var previewRestartValue) && bool.Parse(previewRestartValue);
+    var handoffReadyPath = RequirePath(options, "handoff-ready");
+    if (!string.Equals(handoffReadyPath, resultPath + ".handoff-ready", StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidDataException("更新器握手文件与结果文件不匹配。");
+    }
 
+    updaterGate = UpdateTransactionGate.BeginAcquire(UpdateTransactionGate.UpdaterMutexName, TimeSpan.FromSeconds(5));
+    if (!updaterGate.IsAcquired)
+    {
+        throw new InvalidOperationException("另一个 PathEcho 更新器正在运行，本次更新未开始。请等待其完成后重试。");
+    }
+
+    WriteStateSignal(handoffReadyPath, "ready");
     await WaitForVerifiedProcessExitAsync(processId, processStartedAt);
     parentExited = true;
+    await VerifyHashAsync(package, expectedHash);
+    UpdatePackageValidator.Validate(package, expectedChannel, expectedVersion);
     await ApplyPackageAsync(package, target!, expectedVersion, previewRestart, resultPath!);
     return 0;
 }
 catch (Exception exception)
 {
     TryWriteResult(resultPath, "failed", exception.Message);
+    TryWriteFailureLog(exception);
     if (installValidated &&
         parentExited &&
         target is not null &&
         exception is not UpdateRollbackException)
     {
+        updaterGate?.Dispose();
+        updaterGate = null;
         TryRestartAfterFailure(target, resultPath);
     }
 
     Console.Error.WriteLine($"PathEcho 更新失败，现有安装应保持不变或已经回滚。{exception.Message}");
     return 1;
+}
+finally
+{
+    updaterGate?.Dispose();
 }
 
 static Dictionary<string, string> ParseArguments(string[] arguments)
@@ -168,11 +189,11 @@ static async Task ApplyPackageAsync(string package, string target, string versio
     try
     {
         ExtractSafely(package, stage);
-        Directory.Move(target, backup);
+        await UpdateFileOperation.RetryAsync("备份当前安装目录", target, () => Directory.Move(target, backup));
         targetMoved = true;
-        Directory.Move(stage, target);
+        await UpdateFileOperation.RetryAsync("换入新版程序", target, () => Directory.Move(stage, target));
         newTargetPlaced = true;
-        PreserveInstallerFiles(backup, target);
+        await PreserveInstallerFilesAsync(backup, target);
 
         var executable = Path.Combine(target, "PathEcho.exe");
         var readyPath = resultPath + ".ready";
@@ -202,7 +223,7 @@ static async Task ApplyPackageAsync(string package, string target, string versio
         {
             try
             {
-                Directory.Move(target, failed);
+                await UpdateFileOperation.RetryAsync("隔离失败的新版程序", target, () => Directory.Move(target, failed));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -214,7 +235,7 @@ static async Task ApplyPackageAsync(string package, string target, string versio
         {
             try
             {
-                Directory.Move(backup, target);
+                await UpdateFileOperation.RetryAsync("恢复旧版程序", target, () => Directory.Move(backup, target));
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
@@ -315,6 +336,14 @@ static void TryWriteResult(string? path, string status, string message)
     }
 }
 
+static void WriteStateSignal(string path, string content)
+{
+    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+    var temporary = path + $".{Environment.ProcessId}.tmp";
+    File.WriteAllText(temporary, content);
+    File.Move(temporary, path, true);
+}
+
 static void TryDeleteFile(string path)
 {
     try
@@ -329,7 +358,7 @@ static void TryDeleteFile(string path)
     }
 }
 
-static void PreserveInstallerFiles(string backup, string target)
+static async Task PreserveInstallerFilesAsync(string backup, string target)
 {
     foreach (var source in Directory.EnumerateFiles(backup, "unins*", SearchOption.TopDirectoryOnly))
     {
@@ -339,7 +368,11 @@ static void PreserveInstallerFiles(string backup, string target)
             continue;
         }
 
-        File.Copy(source, Path.Combine(target, Path.GetFileName(source)), false);
+        var destination = Path.Combine(target, Path.GetFileName(source));
+        await UpdateFileOperation.RetryAsync(
+            "保留安装器卸载文件",
+            source,
+            () => File.Copy(source, destination, false));
     }
 }
 
@@ -387,6 +420,29 @@ static void TryDeleteTree(string path)
     {
     }
     catch (UnauthorizedAccessException)
+    {
+    }
+}
+
+static void TryWriteFailureLog(Exception exception)
+{
+    try
+    {
+        var logRoot = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PathEcho",
+            "Logs");
+        Directory.CreateDirectory(logRoot);
+        var path = Path.Combine(logRoot, "update-failures.log");
+        var previous = Path.Combine(logRoot, "update-failures.previous.log");
+        if (File.Exists(path) && new FileInfo(path).Length > 1024 * 1024)
+        {
+            File.Move(path, previous, true);
+        }
+
+        File.AppendAllText(path, $"{DateTimeOffset.Now:O} {exception}\n\n");
+    }
+    catch
     {
     }
 }

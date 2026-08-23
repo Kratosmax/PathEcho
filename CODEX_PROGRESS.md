@@ -18,8 +18,8 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-23，Asia/Shanghai。
-- 版本：`0.2.7`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；`0.2.7` 已正式发布，历史正式标签保持固定，不移动已发布标签。
+- 版本：`0.2.8` 候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 分支：`main`；上一正式版本为 `0.2.7`，历史正式标签保持固定，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
@@ -62,7 +62,7 @@ dotnet --version
 ## 当前待办
 
 - 当前没有已授权但未完成的开发或发布动作，等待用户下一项需求。
-- `v0.2.4` 若曾出现下载后退出且无后续，仍需手动覆盖安装 `v0.2.7` 一次；之后的自动更新链已具备失败反馈与回滚保护。
+- `v0.2.7` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.2.8` 一次；旧客户端无法通过新包修复自身尚未启动的新更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
 
 ## 关键入口
@@ -167,7 +167,9 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前已发布版本：`0.2.7`；`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+> 当前候选版本：`0.2.8`；上一正式版本为 `0.2.7`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+
+`0.2.8` 本地候选验证：更新交接改用落盘握手，更新器全程持有独占锁，普通启动只瞬时探测更新事务以保留原有单实例唤醒；安装目录移动、回滚、卸载器保留和 launcher 复制使用有限文件占用重试并报告阶段/路径，失败写入独立轮转日志，半成品与过期缓存可清理。Release 与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 27/27、`dotnet format --verify-no-changes` 与 `git diff --check` 通过。Lite 预览包 `temp/preview-0.2.8-final/PathEcho-0.2.8-Lite.zip` 为 527726 字节，SHA-256 `19FDB471A8D585F1291F9BCE1DF347032A9ACDBE86A38D7B63DE21626F2D6883`；包内新更新器与 `v0.2.7` 原始更新器的版本/通道/哈希/结构预检均返回 0。1180×760 真实 WPF 截图位于 `temp/preview-0.2.8-final/main-window.png`，进程退出码 0。最终更新器在隔离安装副本中面对 1.2 秒独占文件仍完成替换、ready 和备份清理，退出码 0、事务残留 0。正式四包、签名清单、上一正式版到正式候选的签名升级链和线上资产尚待标签工作流与发布后验证。
 
 `0.2.7` 本地验证：Release 构建与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 24/24 通过，`dotnet format --verify-no-changes` 与 `git diff --check` 通过。Lite 预览包 `temp/preview-0.2.7/PathEcho-0.2.7-Lite.zip` 为 519276 字节，SHA-256 `413ACBA09150E68788F65AF21799D2AC257FD8382FF2B1EF06F8C1F31645B65A`。真实 WPF 验证覆盖有效更新结果显示后消费删除，以及损坏 JSON 始终显示通用反馈、保留证据并写 Critical 日志。
 
