@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using PathEcho.Core.Backup;
+using PathEcho.Core.GameCatalog;
 using PathEcho.Core.Models;
 using PathEcho.Core.Restore;
 using PathEcho.Core.Storage;
@@ -21,6 +23,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     private readonly string _dataRoot;
     private readonly JsonConfigurationStore _configurationStore;
     private readonly SyncBaselineStore _baselineStore;
+    private readonly SyncRunHistoryStore _syncRunHistoryStore;
     private readonly Dictionary<Guid, SyncTaskMonitor> _syncMonitors = new();
     private readonly Dictionary<Guid, GameBackupMonitor> _gameMonitors = new();
     private readonly Dictionary<Guid, SyncEngine> _syncEngines = new();
@@ -38,6 +41,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             "PathEcho");
         _configurationStore = new JsonConfigurationStore(Path.Combine(_dataRoot, "configuration.json"));
         _baselineStore = new SyncBaselineStore(Path.Combine(_dataRoot, "state", "baselines"));
+        _syncRunHistoryStore = new SyncRunHistoryStore(Path.Combine(_dataRoot, "state", "sync-runs.json"));
     }
 
     public AppConfiguration Configuration { get; private set; } = new();
@@ -49,6 +53,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     public ObservableCollection<GameProfileRow> GameProfiles { get; } = new();
 
     public ObservableCollection<HistoryRow> History { get; } = new();
+
+    public ObservableCollection<SyncRunRow> SyncRuns { get; } = new();
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -127,6 +133,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         }
 
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
+        await RefreshSyncRunHistorySafelyAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task AddSyncTaskAsync(SyncTaskDefinition task, CancellationToken cancellationToken = default)
@@ -242,20 +249,40 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         var task = Configuration.SyncTasks.Single(item => item.Id == taskId);
         var row = SyncTasks.Single(item => item.Definition.Id == taskId);
         AppLogger.Debug($"Manual synchronization started for task {taskId:N}.");
+        var startedAt = DateTimeOffset.UtcNow;
         await InvokeOnUiAsync(() => row.Status = "正在同步");
         try
         {
             var result = await GetSyncRunner(task.Id).RunAsync(task, true, cancellationToken).ConfigureAwait(false);
             await InvokeOnUiAsync(() => row.Status = FormatSyncResult(result));
+            await RecordSyncRunSafelyAsync(task, "手动", result, null, startedAt).ConfigureAwait(false);
             AppLogger.Debug($"Manual synchronization completed for task {taskId:N}.");
             return result;
         }
         catch (Exception exception)
         {
             await InvokeOnUiAsync(() => row.Status = "同步失败");
+            await RecordSyncRunSafelyAsync(task, "手动", null, exception, startedAt).ConfigureAwait(false);
             AppLogger.Error($"Manual synchronization failed for task {taskId:N}.", exception);
             throw;
         }
+    }
+
+    public async Task<SyncPreviewResult> PreviewSyncAsync(Guid taskId, CancellationToken cancellationToken = default)
+    {
+        EnsureNotPreview("界面预览模式不会读取真实同步目录。");
+        var task = Configuration.SyncTasks.Single(item => item.Id == taskId);
+        return await GetSyncRunner(task.Id).PreviewAsync(task, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<GameDiscoveryOutcome> DiscoverRunningGamesAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureNotPreview("界面预览模式不会访问游戏规则网络或读取真实进程。");
+        using var httpClient = UpdateRoutePlanner.CreateHttpClient(Configuration.UpdateNetwork);
+        var client = new GameCatalogClient(httpClient, Path.Combine(_dataRoot, "catalog", "game-catalog.json"));
+        var fetched = await client.FetchAsync(Configuration.UpdateNetwork, cancellationToken).ConfigureAwait(false);
+        var matches = GameDiscoveryService.Match(fetched.Catalog, CaptureRunningProcesses());
+        return new GameDiscoveryOutcome(matches, fetched.Catalog.Revision, fetched.UsedCachedCopy, fetched.RouteFailures);
     }
 
     public async Task<SnapshotCreationResult> BackupNowAsync(Guid profileId, CancellationToken cancellationToken = default)
@@ -290,7 +317,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         return await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
-    public async Task SaveSettingsAsync(
+    public async Task<SettingsSaveResult> SaveSettingsAsync(
         bool startWithWindows,
         bool startMinimized,
         bool checkForUpdates,
@@ -313,7 +340,13 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             UpdateNetwork = UpdateRoutePlanner.Normalize(updateNetwork),
         };
         var movedProfiles = new List<Guid>();
+        var profilesWithoutBackups = 0;
         var manager = new BackupDirectoryManager();
+        if (!_previewMode && backupRootChanged)
+        {
+            await manager.EnsureWritableAsync(newBackupRoot, cancellationToken).ConfigureAwait(false);
+        }
+
         if (!_previewMode && backupRootChanged)
         {
             await StopAllGameMonitorsAsync().ConfigureAwait(false);
@@ -329,11 +362,16 @@ public sealed class PathEchoRuntime : IAsyncDisposable
                     {
                         movedProfiles.Add(profile.Id);
                     }
+                    else
+                    {
+                        profilesWithoutBackups++;
+                    }
                 }
             }
 
-            await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
-            Configuration = updatedConfiguration;
+            Configuration = _previewMode
+                ? updatedConfiguration
+                : await _configurationStore.SaveAndVerifyAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception)
         {
@@ -364,16 +402,22 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             throw;
         }
 
+        string? startupWarning = null;
         if (!_previewMode)
         {
             AppLogger.Configure(enableDebugLogging);
             try
             {
                 _startup.SetEnabled(Environment.ProcessPath!, startWithWindows);
+                if (_startup.IsEnabled(Environment.ProcessPath!) != startWithWindows)
+                {
+                    throw new InvalidOperationException("Windows 返回的开机自启状态与设置不一致。");
+                }
             }
             catch (Exception exception)
             {
                 AppLogger.Error("Startup registration update failed after saving settings.", exception);
+                startupWarning = $"配置已保存，但开机自启设置未生效：{exception.Message}";
             }
 
             if (backupRootChanged)
@@ -383,6 +427,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
                 await RefreshHistorySafelyAsync(cancellationToken).ConfigureAwait(false);
             }
         }
+
+        return new SettingsSaveResult(backupRootChanged, movedProfiles.Count, profilesWithoutBackups, startupWarning);
     }
 
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
@@ -421,6 +467,21 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         });
     }
 
+    public async Task RefreshSyncRunHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        var records = _previewMode
+            ? Array.Empty<SyncRunRecord>()
+            : await _syncRunHistoryStore.LoadAsync(cancellationToken).ConfigureAwait(false);
+        await InvokeOnUiAsync(() =>
+        {
+            SyncRuns.Clear();
+            foreach (var record in records.OrderByDescending(record => record.CompletedAtUtc))
+            {
+                SyncRuns.Add(new SyncRunRow(record));
+            }
+        });
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var taskId in _syncMonitors.Keys.ToArray())
@@ -446,11 +507,16 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         }
 
         var monitor = new SyncTaskMonitor(task, GetSyncRunner(task.Id));
-        monitor.Synchronized += (_, result) => SetSyncStatus(task.Id, FormatSyncResult(result));
+        monitor.Synchronized += (_, result) =>
+        {
+            SetSyncStatus(task.Id, FormatSyncResult(result));
+            _ = RecordSyncRunSafelyAsync(task, "后台", result, null);
+        };
         monitor.SynchronizationFailed += (_, exception) =>
         {
             AppLogger.Error($"Automatic synchronization failed for task {task.Id:N}.", exception);
             SetSyncStatus(task.Id, $"失败：{exception.Message}");
+            _ = RecordSyncRunSafelyAsync(task, "后台", null, exception);
         };
         _syncMonitors.Add(task.Id, monitor);
         try
@@ -629,6 +695,102 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         }
     }
 
+    private async Task RefreshSyncRunHistorySafelyAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            await RefreshSyncRunHistoryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            AppLogger.Error("Sync run history refresh failed.", exception);
+        }
+    }
+
+    private async Task RecordSyncRunSafelyAsync(
+        SyncTaskDefinition task,
+        string trigger,
+        SyncRunResult? result,
+        Exception? exception,
+        DateTimeOffset? startedAt = null)
+    {
+        try
+        {
+            await RecordSyncRunAsync(task, trigger, startedAt ?? DateTimeOffset.UtcNow, result, exception, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception historyException)
+        {
+            AppLogger.Error($"Sync run history write failed for task {task.Id:N}.", historyException);
+        }
+    }
+
+    private async Task RecordSyncRunAsync(
+        SyncTaskDefinition task,
+        string trigger,
+        DateTimeOffset startedAt,
+        SyncRunResult? result,
+        Exception? exception,
+        CancellationToken cancellationToken)
+    {
+        if (_previewMode)
+        {
+            return;
+        }
+
+        var error = exception?.Message;
+        if (error?.Length > 500)
+        {
+            error = error[..500];
+        }
+
+        var record = new SyncRunRecord
+        {
+            TaskId = task.Id,
+            TaskName = task.Name,
+            Trigger = trigger,
+            StartedAtUtc = startedAt,
+            CompletedAtUtc = DateTimeOffset.UtcNow,
+            Succeeded = exception is null,
+            CopiedFiles = result?.CopiedFiles ?? 0,
+            DeletedFiles = result?.DeletedFiles ?? 0,
+            Conflicts = result?.Conflicts ?? 0,
+            Error = error,
+        };
+        await _syncRunHistoryStore.AppendAsync(record, cancellationToken).ConfigureAwait(false);
+        await InvokeOnUiAsync(() =>
+        {
+            SyncRuns.Insert(0, new SyncRunRow(record));
+            while (SyncRuns.Count > 200)
+            {
+                SyncRuns.RemoveAt(SyncRuns.Count - 1);
+            }
+        });
+    }
+
+    private static IReadOnlyList<RunningGameProcess> CaptureRunningProcesses()
+    {
+        var result = new List<RunningGameProcess>();
+        foreach (var process in Process.GetProcesses())
+        {
+            using (process)
+            {
+                try
+                {
+                    var path = process.MainModule?.FileName;
+                    if (!string.IsNullOrWhiteSpace(path))
+                    {
+                        result.Add(new RunningGameProcess(process.Id, path));
+                    }
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+                {
+                }
+            }
+        }
+
+        return result;
+    }
+
     private void SetSyncStatus(Guid taskId, string status) => System.Windows.Application.Current.Dispatcher.Invoke(() =>
     {
         var row = SyncTasks.FirstOrDefault(item => item.Definition.Id == taskId);
@@ -758,6 +920,32 @@ public sealed class HistoryRow
     public int FileCount => Version.Manifest.Files.Count;
     public string SnapshotDirectory => Version.SnapshotDirectory;
 }
+
+public sealed class SyncRunRow
+{
+    public SyncRunRow(SyncRunRecord record) => Record = record;
+
+    public SyncRunRecord Record { get; }
+    public string TaskName => Record.TaskName;
+    public string CompletedAt => Record.CompletedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+    public string Trigger => Record.Trigger;
+    public string Result => Record.Succeeded ? "成功" : "失败";
+    public string Summary => Record.Succeeded
+        ? $"复制 {Record.CopiedFiles} · 删除 {Record.DeletedFiles} · 冲突 {Record.Conflicts}"
+        : Record.Error ?? "未知错误";
+}
+
+public sealed record GameDiscoveryOutcome(
+    IReadOnlyList<DiscoveredGame> Matches,
+    long CatalogRevision,
+    bool UsedCachedCopy,
+    IReadOnlyList<string> RouteFailures);
+
+public sealed record SettingsSaveResult(
+    bool BackupRootChanged,
+    int MovedBackupProfiles,
+    int ProfilesWithoutBackups,
+    string? StartupWarning);
 
 public abstract class NotifyObject : INotifyPropertyChanged
 {

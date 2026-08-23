@@ -1,5 +1,6 @@
 using System.Windows;
 using Microsoft.Win32;
+using PathEcho.Core.GameCatalog;
 using PathEcho.Core.Models;
 using OpenFileDialog = Microsoft.Win32.OpenFileDialog;
 using OpenFolderDialog = Microsoft.Win32.OpenFolderDialog;
@@ -8,10 +9,17 @@ namespace PathEcho.Dialogs;
 
 public partial class GameProfileEditorWindow : Window
 {
-    public GameProfileEditorWindow()
+    public GameProfileEditorWindow(DiscoveredGame? discoveredGame = null)
     {
         InitializeComponent();
         WindowBackdrop.Attach(this);
+        if (discoveredGame is not null)
+        {
+            NameBox.Text = discoveredGame.CatalogEntry.Name;
+            SavePathBox.Text = discoveredGame.PreferredSaveDirectory;
+            ProcessPathBox.Text = discoveredGame.ExecutablePath;
+            ProcessCheck.IsChecked = true;
+        }
     }
 
     public GameBackupProfile? Result { get; private set; }

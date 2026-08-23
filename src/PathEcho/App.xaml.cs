@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using PathEcho.Platform.Windows.Instance;
 using PathEcho.Services;
 using Forms = System.Windows.Forms;
 
@@ -11,25 +12,33 @@ namespace PathEcho;
 
 public partial class App : System.Windows.Application
 {
-    private Mutex? _singleInstance;
+    private SingleInstanceCoordinator? _singleInstance;
     private PathEchoRuntime? _runtime;
     private MainWindow? _mainWindow;
     private Forms.NotifyIcon? _trayIcon;
     private Icon? _trayIconImage;
     private bool _isExiting;
+    private bool _activationRequested;
 
     public bool IsExiting => _isExiting;
 
     private async void OnStartup(object sender, StartupEventArgs e)
     {
         var previewMode = e.Args.Contains("--preview", StringComparer.OrdinalIgnoreCase);
-        var mutexName = previewMode
+        var instanceName = previewMode
             ? $"Local\\PathEcho.Preview.{Environment.ProcessId}"
             : "Local\\PathEcho.SingleInstance";
-        _singleInstance = new Mutex(true, mutexName, out var isFirstInstance);
-        if (!isFirstInstance)
+        _singleInstance = SingleInstanceCoordinator.Create(
+            instanceName,
+            () =>
+            {
+                if (!Dispatcher.HasShutdownStarted)
+                {
+                    Dispatcher.BeginInvoke(RequestMainWindowActivation);
+                }
+            });
+        if (!_singleInstance.IsPrimary)
         {
-            System.Windows.MessageBox.Show("PathEcho 已经在运行。请从任务栏通知区域打开。", "PathEcho", MessageBoxButton.OK, MessageBoxImage.Information);
             Shutdown();
             return;
         }
@@ -52,9 +61,9 @@ public partial class App : System.Windows.Application
         _mainWindow = new MainWindow(_runtime);
         MainWindow = _mainWindow;
         CreateTrayIcon();
-        if (previewMode || (!background && !_runtime.Configuration.StartMinimized))
+        if (previewMode || _activationRequested || (!background && !_runtime.Configuration.StartMinimized))
         {
-            _mainWindow.Show();
+            ShowMainWindow();
         }
 
         if (!previewMode && _runtime.Configuration.CheckForUpdates)
@@ -94,6 +103,23 @@ public partial class App : System.Windows.Application
         }
 
         _mainWindow.Activate();
+        _activationRequested = false;
+    }
+
+    private void RequestMainWindowActivation()
+    {
+        if (_isExiting)
+        {
+            return;
+        }
+
+        if (_mainWindow is null)
+        {
+            _activationRequested = true;
+            return;
+        }
+
+        ShowMainWindow();
     }
 
     public async void ExitApplication()
@@ -192,10 +218,6 @@ public partial class App : System.Windows.Application
     {
         _trayIcon?.Dispose();
         _trayIconImage?.Dispose();
-        if (_singleInstance is not null)
-        {
-            _singleInstance.ReleaseMutex();
-            _singleInstance.Dispose();
-        }
+        _singleInstance?.Dispose();
     }
 }

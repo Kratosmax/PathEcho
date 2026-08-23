@@ -48,11 +48,18 @@ dotnet --version
 - 更新设置支持多条 URL 前缀、直连兜底、0 到 10 优先级与 0 禁用；HTTP 出网代理继续独立配置。
 - 可选 Debug 滚动日志、统一 PathEcho Logo、窗口/任务栏/托盘/安装器图标和高对比侧栏 Hover。
 - 同步任务页支持弹性列宽、绿色高对比 Hover/选中态、搜索与状态筛选、目录可用性提示、双击编辑、右键同步/编辑/复制/打开目录/删除，以及空数据禁用操作。
+- 同步任务支持相对路径 glob 包含/排除规则；扫描与规划均应用相同规则，跳过重解析点，预演与真实执行共用 `SyncPlanner` 且预演不更新目录或基线。
+- 同步成功与失败运行记录原子保存并限制为最近 200 条；历史写入失败不会反转已经成功的文件同步结果。
+- 智能游戏识别从 GitHub 签名目录匹配当前运行进程，复用更新的 URL 前缀线路和 HTTP 出网代理，具备结构/大小/签名校验、原子缓存、离线回退和修订号防回退。
+- `config/game-catalog.source.json` 由独立 GitHub Actions 工作流用现有正式密钥签为 `config/game-catalog.json`；游戏规则可独立更新，不需要重新发布程序包。
 - 预览模式使用隔离的内存配置和独立单实例锁，不读取真实用户配置，也不受已运行正式实例阻塞。
+- 设置保存会先提交线路表格编辑、验证新备份目录可写，再原子写入并反序列化复核配置；默认目录改变时迁移已有隐式备份，没有可迁移数据或开机自启登记失败都会给出明确反馈。
+- “浏览”选择默认备份目录后会弹出迁移确认并立即复用设置保存链路；单实例协调器继续使用 `Local\PathEcho.SingleInstance` 兼容旧版，同时由专用线程持有 Mutex，第二实例只发送激活信号，不再错误释放锁。
 
 ## 当前待办
 
-- `0.2.2` Lite Setup 运行时误判修复、提交、推送、云端签名发布和线上资产核验均已完成，当前没有已授权但未完成的代码任务。
+- 同步预演、包含/排除规则、同步运行历史、GitHub 智能游戏目录和设置持久化修复已在本地实现并验证；当前工作区尚未提交、推送、打标签或发布，线上 `v0.2.2` 不包含这些改动。
+- 首次推送 `config/game-catalog.source.json` 后需等待 `game-catalog.yml` 生成签名文件，并核验默认 raw URL、URL 前缀线路和 HTTP 出网代理都能获取同一可信修订；在此之前本地客户端只能使用已有可信缓存。
 - `0.2.1` 双击闪退与运行时一致性修复、提交、推送、云端构建、签名发布和线上资产核验均已完成。
 - 本机直连 `releases/latest/download/update-lite.json` 在接收阶段被连接重置，因此没有独立证明网页 latest 重定向链；GitHub latest API 已指向 `v0.2.2`，且通过 GitHub CLI 下载的该 Release 清单与 API digest 一致。后续在直连 GitHub 正常的网络环境补测即可，不得把本机连接重置描述成服务端 404。
 - 上一正式版 `v0.2.0` 原始 Lite 客户端已接受 `0.2.1` Lite 候选包；旧 Full 原包因本机直连过慢未完成下载，因此旧 Full 完整自动升级链仍未验证。该边界不影响已完成的 Full 清单验签、资产 digest、SHA256 和包结构交叉核验。
@@ -73,6 +80,14 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-08-23 本地功能分支实际通过：
+
+- `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误。
+- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build` 在真实 Windows 用户环境 21/21 通过；新增覆盖配置全部用户设置的保存后重载、暂存清理、线路表格提交、目录选择确认、有/无旧备份的目录迁移以及重复启动锁生命周期，并覆盖同步过滤/预演、200 条运行历史上限、签名游戏目录、前缀故障转移、可信缓存与旧签名重放拒绝。Restart Manager 同一轮测试通过。
+- `dotnet format PathEcho.sln --no-restore --verify-no-changes` 与 `git diff --check` 通过。
+- 920×620 隔离 WPF 设置页截图 `temp/settings-directory-confirm-fix.png` 已真实渲染并核验，没有空白、重叠或控件截断；此前同步页、游戏页、存档历史与同步运行 Tab 的证据位于忽略提交的 `temp/ui-check`。
+- 本地 Lite 预览包 `temp/preview-review/PathEcho-0.2.2-Lite.zip`：512478 字节，SHA-256 `2E60A35F51504080C6EC511EE370729BF563DBA4083EA1709395FBB4A7729A12`；最新单实例退出竞态修复已包含，包内更新器 `--verify-only` 返回 0。该包沿用当前正式版本号，仅为本地验收，不是 Release。默认 `temp/preview` 因旧预览实例 PID 38272 占用而保留未覆盖。
 
 2026-08-22 实际通过：
 
@@ -152,3 +167,4 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
+> 当前发布准备版本：`0.2.3`；历史 `v0.2.2` 发布记录保持不变。

@@ -32,6 +32,8 @@ public partial class SyncTaskEditorWindow : Window
             DeletionBox.SelectedIndex = (int)task.DeletionMode;
             ConflictBox.SelectedIndex = (int)task.ConflictPolicy;
             AutoStartCheck.IsChecked = duplicate ? false : task.StartWithApplication;
+            IncludePatternsBox.Text = string.Join(Environment.NewLine, task.Filters?.IncludePatterns ?? Array.Empty<string>());
+            ExcludePatternsBox.Text = string.Join(Environment.NewLine, task.Filters?.ExcludePatterns ?? Array.Empty<string>());
         }
     }
 
@@ -64,6 +66,11 @@ public partial class SyncTaskEditorWindow : Window
                 DeletionMode = (DeletionMode)DeletionBox.SelectedIndex,
                 ConflictPolicy = (ConflictPolicy)ConflictBox.SelectedIndex,
                 StartWithApplication = AutoStartCheck.IsChecked == true,
+                Filters = new SyncFilterRules
+                {
+                    IncludePatterns = SplitPatterns(IncludePatternsBox.Text),
+                    ExcludePatterns = SplitPatterns(ExcludePatternsBox.Text),
+                },
             };
             Result.Validate();
             DialogResult = true;
@@ -73,4 +80,7 @@ public partial class SyncTaskEditorWindow : Window
             ErrorText.Text = exception.Message;
         }
     }
+
+    private static string[] SplitPatterns(string value) =>
+        value.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

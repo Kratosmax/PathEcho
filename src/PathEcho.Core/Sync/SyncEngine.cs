@@ -40,8 +40,8 @@ public sealed class SyncEngine
                 _scanner.Invalidate(rightRoot);
             }
 
-            var left = await _scanner.ScanAsync(leftRoot, cancellationToken).ConfigureAwait(false);
-            var right = await _scanner.ScanAsync(rightRoot, cancellationToken).ConfigureAwait(false);
+            var left = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false);
+            var right = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false);
             var plan = _planner.CreatePlan(task, left, right, baseline);
             var copied = 0;
             var deleted = 0;
@@ -77,14 +77,42 @@ public sealed class SyncEngine
                 }
             }
 
-            var finalLeft = await _scanner.ScanAsync(leftRoot, cancellationToken).ConfigureAwait(false);
-            var finalRight = await _scanner.ScanAsync(rightRoot, cancellationToken).ConfigureAwait(false);
+            var finalLeft = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false);
+            var finalRight = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false);
             var keys = finalLeft.Keys.Concat(finalRight.Keys).Distinct(StringComparer.OrdinalIgnoreCase);
             var entries = keys.ToDictionary(
                 key => key,
                 key => new SyncBaselineEntry(finalLeft.GetValueOrDefault(key), finalRight.GetValueOrDefault(key)),
                 StringComparer.OrdinalIgnoreCase);
             return new SyncRunResult(copied, deleted, conflicts, new SyncBaseline(entries));
+        }
+        finally
+        {
+            _runGate.Release();
+        }
+    }
+
+    public async Task<SyncPreviewResult> PreviewAsync(
+        SyncTaskDefinition task,
+        SyncBaseline baseline,
+        CancellationToken cancellationToken = default)
+    {
+        await _runGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            task.Validate();
+            var leftRoot = SyncTaskDefinition.NormalizeRoot(task.LeftPath);
+            var rightRoot = SyncTaskDefinition.NormalizeRoot(task.RightPath);
+            if (!Directory.Exists(leftRoot) || !Directory.Exists(rightRoot))
+            {
+                throw new DirectoryNotFoundException("同步预演要求左右目录都已存在。");
+            }
+
+            _scanner.Invalidate(leftRoot);
+            _scanner.Invalidate(rightRoot);
+            var left = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false);
+            var right = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false);
+            return new SyncPreviewResult(_planner.CreatePlan(task, left, right, baseline).Actions);
         }
         finally
         {

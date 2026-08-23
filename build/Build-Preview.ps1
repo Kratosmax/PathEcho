@@ -1,13 +1,20 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$DotNetPath = "dotnet"
+    [string]$DotNetPath = "dotnet",
+    [string]$OutputDirectory = "temp\preview"
 )
 
 $ErrorActionPreference = "Stop"
 $repository = Split-Path -Parent $PSScriptRoot
 $version = ([xml](Get-Content -Raw -LiteralPath (Join-Path $repository "Directory.Build.props"))).Project.PropertyGroup.Version
-$previewRoot = Join-Path $repository "temp\preview"
+$tempRoot = [IO.Path]::GetFullPath((Join-Path $repository "temp"))
+$previewRoot = [IO.Path]::GetFullPath((Join-Path $repository $OutputDirectory))
+$tempPrefix = $tempRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if (-not $previewRoot.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Preview output must remain inside the repository temp directory: $previewRoot"
+}
+
 $packageRoot = Join-Path $previewRoot "PathEcho-$version-Lite"
 $updaterRoot = Join-Path $previewRoot "updater"
 $archive = Join-Path $previewRoot "PathEcho-$version-Lite.zip"
@@ -15,8 +22,9 @@ $archive = Join-Path $previewRoot "PathEcho-$version-Lite.zip"
 foreach ($path in @($packageRoot, $updaterRoot)) {
     $resolvedPreview = [IO.Path]::GetFullPath($previewRoot)
     $resolvedPath = [IO.Path]::GetFullPath($path)
-    if (-not $resolvedPath.StartsWith($resolvedPreview, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to clean a path outside temp\preview: $resolvedPath"
+    $previewPrefix = $resolvedPreview.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedPath.StartsWith($previewPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clean a path outside the preview output directory: $resolvedPath"
     }
 
     if (Test-Path -LiteralPath $resolvedPath) {

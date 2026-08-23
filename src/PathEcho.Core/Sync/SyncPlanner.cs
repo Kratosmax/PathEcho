@@ -12,6 +12,7 @@ public sealed class SyncPlanner
     {
         var paths = left.Keys.Concat(right.Keys).Concat(baseline.Files.Keys)
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Where(path => task.Filters?.Includes(path) ?? true)
             .Order(StringComparer.OrdinalIgnoreCase);
         var actions = new List<SyncAction>();
 

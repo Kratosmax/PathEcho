@@ -1,10 +1,12 @@
 using PathEcho.Core.Backup;
+using PathEcho.Core.GameCatalog;
 using PathEcho.Core.Models;
 using PathEcho.Core.Restore;
 using PathEcho.Core.Storage;
 using PathEcho.Core.Sync;
 using PathEcho.Core.Update;
 using PathEcho.Platform.Windows.Restore;
+using PathEcho.Platform.Windows.Instance;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
@@ -12,7 +14,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Xml.Linq;
 
-var testRoot = Path.Combine(Environment.CurrentDirectory, "temp", "smoke", Guid.NewGuid().ToString("N"));
+var repositoryRoot = FindRepositoryRoot();
+var testRoot = Path.Combine(repositoryRoot, "temp", "smoke", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(testRoot);
 
 var tests = new (string Name, Func<Task> Run)[]
@@ -23,7 +26,11 @@ var tests = new (string Name, Func<Task> Run)[]
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
     ("目录变化可合并触发自动同步", TestSyncMonitorAsync),
     ("同一任务并发同步会串行更新基线", TestSyncTaskRunnerSerializationAsync),
+    ("同步过滤与预演共用规划且不修改目录", TestSyncFiltersAndPreviewAsync),
+    ("同步运行历史有上限并原子持久化", TestSyncRunHistoryStoreAsync),
     ("只读表格不会进入编辑模式", TestReadOnlyDataGridContractAsync),
+    ("设置保存会提交线路表格编辑", TestSettingsGridCommitContractAsync),
+    ("重复启动会激活主实例且不会错误释放锁", TestSingleInstanceCoordinatorAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
@@ -31,6 +38,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("备份目录可迁移、发现并导入", TestBackupDirectoryManagerAsync),
     ("更新线路可规范化并稳定排序", TestUpdateRoutePlanningAsync),
     ("签名更新清单可验证并拒绝篡改", TestUpdateManifestSignatureAsync),
+    ("签名游戏目录可代理获取、识别并回退可信缓存", TestGameCatalogAsync),
     ("更新下载可故障转移并清理失败暂存", TestUpdatePackageDownloadAsync),
     ("更新器拒绝路径穿越包", TestUpdaterPackageValidationAsync),
 };
@@ -59,11 +67,7 @@ finally
 
 Task TestLiteInstallerRuntimeDetectionContractAsync()
 {
-    var installerPath = Path.Combine(Environment.CurrentDirectory, "build", "PathEcho.iss");
-    if (!File.Exists(installerPath))
-    {
-        installerPath = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "build", "PathEcho.iss"));
-    }
+    var installerPath = Path.Combine(repositoryRoot, "build", "PathEcho.iss");
 
     var installer = File.ReadAllText(installerPath);
 
@@ -88,7 +92,11 @@ async Task TestConfigurationStoreAsync()
     };
     var expected = new AppConfiguration
     {
+        StartWithWindows = false,
+        StartMinimized = true,
+        CheckForUpdates = false,
         EnableDebugLogging = true,
+        DefaultBackupDirectory = Path.Combine(testRoot, "configuration-backups"),
         SyncTasks = new[] { task },
         UpdateNetwork = new UpdateNetworkOptions
         {
@@ -102,14 +110,20 @@ async Task TestConfigurationStoreAsync()
     };
     var store = new JsonConfigurationStore(path);
 
-    await store.SaveAsync(expected);
-    var actual = await store.LoadAsync();
+    var verified = await store.SaveAndVerifyAsync(expected);
+    var actual = await new JsonConfigurationStore(path).LoadAsync();
 
+    False(verified.StartWithWindows, "写入校验结果丢失了开机自启设置。");
+    False(actual.StartWithWindows, "重载后开机自启设置未保持一致。");
+    True(actual.StartMinimized, "重载后最小化启动设置未保持一致。");
+    False(actual.CheckForUpdates, "重载后自动更新设置未保持一致。");
     Equal(1, actual.SyncTasks.Count, "配置任务数量不正确。");
     Equal(task.Id, actual.SyncTasks[0].Id, "配置任务 ID 未保持一致。");
     True(actual.EnableDebugLogging, "Debug 日志开关未保持一致。");
+    Equal(expected.DefaultBackupDirectory, actual.DefaultBackupDirectory, "默认备份目录未保持一致。");
     Equal(2, actual.UpdateNetwork.UrlRoutes.Count, "更新线路配置未保持一致。");
     Equal("http://127.0.0.1:7890", actual.UpdateNetwork.HttpProxy!, "HTTP 代理配置未保持一致。");
+    False(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp").Any(), "配置保存留下了暂存文件。");
 
     var legacyPath = Path.Combine(testRoot, "configuration", "legacy.json");
     await File.WriteAllTextAsync(legacyPath, "{\"schemaVersion\":1}");
@@ -301,18 +315,200 @@ Task TestReadOnlyDataGridContractAsync()
 {
     XNamespace presentation = "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
     XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
-    var app = XDocument.Load(Path.Combine(Environment.CurrentDirectory, "src", "PathEcho", "App.xaml"));
+    var app = XDocument.Load(Path.Combine(repositoryRoot, "src", "PathEcho", "App.xaml"));
     var dataGridStyle = app.Descendants(presentation + "Style")
         .Single(element => (string?)element.Attribute("TargetType") == "DataGrid");
     var readOnlySetter = dataGridStyle.Elements(presentation + "Setter")
         .SingleOrDefault(element => (string?)element.Attribute("Property") == "IsReadOnly");
     Equal("True", (string?)readOnlySetter?.Attribute("Value") ?? string.Empty, "全局 DataGrid 没有保持只读。");
 
-    var mainWindow = XDocument.Load(Path.Combine(Environment.CurrentDirectory, "src", "PathEcho", "MainWindow.xaml"));
+    var mainWindow = XDocument.Load(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml"));
     var routesGrid = mainWindow.Descendants(presentation + "DataGrid")
         .Single(element => (string?)element.Attribute(x + "Name") == "UpdateRoutesGrid");
     Equal("False", (string?)routesGrid.Attribute("IsReadOnly") ?? string.Empty, "更新线路表没有保留编辑能力。");
     return Task.CompletedTask;
+}
+
+Task TestSettingsGridCommitContractAsync()
+{
+    var source = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml.cs"));
+    True(
+        source.Contains("!UpdateRoutesGrid.CommitEdit(DataGridEditingUnit.Cell, true)", StringComparison.Ordinal),
+        "设置保存前没有提交线路表格的当前单元格编辑。");
+    True(
+        source.Contains("!UpdateRoutesGrid.CommitEdit(DataGridEditingUnit.Row, true)", StringComparison.Ordinal),
+        "设置保存前没有提交线路表格的当前行编辑。");
+    var browseStart = source.IndexOf("private async void OnBrowseDefaultBackup", StringComparison.Ordinal);
+    var saveStart = source.IndexOf("private async void OnSaveSettings", browseStart, StringComparison.Ordinal);
+    True(browseStart >= 0 && saveStart > browseStart, "无法定位默认备份目录选择处理器。");
+    var browseHandler = source[browseStart..saveStart];
+    True(browseHandler.Contains("更改并保存", StringComparison.Ordinal), "选择默认备份目录后没有要求用户确认迁移。");
+    True(
+        browseHandler.Contains("await SaveSettingsFromControlsAsync();", StringComparison.Ordinal),
+        "确认默认备份目录后没有立即保存设置。");
+    return Task.CompletedTask;
+}
+
+async Task TestSingleInstanceCoordinatorAsync()
+{
+    var instanceName = $"Local\\PathEcho.Smoke.{Guid.NewGuid():N}";
+    var activated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    using (var primary = SingleInstanceCoordinator.Create(instanceName, () => activated.TrySetResult()))
+    {
+        True(primary.IsPrimary, "第一个实例没有获得单实例锁。");
+        using var secondary = SingleInstanceCoordinator.Create(instanceName, () => { });
+        False(secondary.IsPrimary, "第二个实例错误获得了单实例锁。");
+        await activated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    using var reopened = SingleInstanceCoordinator.Create(instanceName, () => { });
+    True(reopened.IsPrimary, "主实例退出后无法重新获得单实例锁。");
+}
+
+async Task TestSyncFiltersAndPreviewAsync()
+{
+    var root = Path.Combine(testRoot, "sync-filter-preview");
+    var left = Path.Combine(root, "left");
+    var right = Path.Combine(root, "right");
+    Directory.CreateDirectory(Path.Combine(left, "Saves"));
+    Directory.CreateDirectory(right);
+    await File.WriteAllTextAsync(Path.Combine(left, "Saves", "slot.sav"), "save");
+    await File.WriteAllTextAsync(Path.Combine(left, "Saves", "trace.tmp"), "ignore");
+    var task = new SyncTaskDefinition
+    {
+        Name = "过滤预演",
+        LeftPath = left,
+        RightPath = right,
+        DeletionMode = DeletionMode.Propagate,
+        Filters = new SyncFilterRules
+        {
+            IncludePatterns = new[] { "Saves/*" },
+            ExcludePatterns = new[] { "*.tmp" },
+        },
+    };
+    var legacyBaseline = new SyncBaseline(new Dictionary<string, SyncBaselineEntry>(StringComparer.OrdinalIgnoreCase)
+    {
+        [Path.Combine("Saves", "legacy.tmp")] = new(null, new FileStamp(1, 1, "A")),
+    });
+    var engine = new SyncEngine(Path.Combine(root, "vault"));
+
+    var preview = await engine.PreviewAsync(task, legacyBaseline);
+    Equal(1, preview.CopiedFiles, "预演没有只包含符合规则的存档文件。");
+    Equal(0, preview.DeletedFiles, "旧基线中的排除文件被错误规划为删除。");
+    False(File.Exists(Path.Combine(right, "Saves", "slot.sav")), "预演修改了目标目录。");
+
+    await engine.RunAsync(task, legacyBaseline, true);
+    True(File.Exists(Path.Combine(right, "Saves", "slot.sav")), "符合规则的文件未同步。");
+    False(File.Exists(Path.Combine(right, "Saves", "trace.tmp")), "排除文件被错误同步。");
+}
+
+async Task TestSyncRunHistoryStoreAsync()
+{
+    var path = Path.Combine(testRoot, "sync-history", "runs.json");
+    var store = new SyncRunHistoryStore(path);
+    for (var index = 0; index < 205; index++)
+    {
+        await store.AppendAsync(new SyncRunRecord
+        {
+            TaskId = Guid.NewGuid(),
+            TaskName = $"任务 {index}",
+            StartedAtUtc = DateTimeOffset.UtcNow,
+            CompletedAtUtc = DateTimeOffset.UtcNow,
+            Succeeded = true,
+        });
+    }
+
+    var records = await store.LoadAsync();
+    Equal(200, records.Count, "同步运行历史没有限制为 200 条。");
+    Equal("任务 204", records[0].TaskName, "同步运行历史顺序不正确。");
+    False(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp").Any(), "同步运行历史留下了暂存文件。");
+}
+
+async Task TestGameCatalogAsync()
+{
+    var sourceCatalog = JsonSerializer.Deserialize<GameCatalogDocument>(
+        await File.ReadAllTextAsync(Path.Combine(repositoryRoot, "config", "game-catalog.source.json")),
+        new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        ?? throw new InvalidDataException("仓库游戏目录源文件为空。");
+    GameCatalogVerifier.Validate(sourceCatalog);
+    True(sourceCatalog.Games.Count >= 1, "仓库游戏目录源文件没有规则。");
+    Equal(
+        GameCatalogClient.DefaultCatalogUri,
+        UpdateRoutePlanner.CreateRoutes(GameCatalogClient.DefaultCatalogUri, new UpdateNetworkOptions())[0].RequestUri,
+        "raw.githubusercontent.com 游戏目录没有进入共用 GitHub 线路。可用域名列表可能未同步。");
+
+    using var signer = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+    var catalog = new GameCatalogDocument
+    {
+        Revision = 7,
+        Games = new[]
+        {
+            new GameCatalogEntry
+            {
+                Id = "test-game",
+                Name = "测试游戏",
+                Executables = new[] { "TestGame.exe" },
+                SavePathTemplates = new[] { "{LocalAppData}\\TestGame\\Saves" },
+            },
+        },
+    };
+    var signature = signer.SignData(
+        catalog.GetCanonicalPayload(),
+        HashAlgorithmName.SHA256,
+        DSASignatureFormat.Rfc3279DerSequence);
+    catalog = catalog with { Signature = Convert.ToBase64String(signature) };
+    var json = JsonSerializer.Serialize(catalog);
+    var publicKey = signer.ExportSubjectPublicKeyInfoPem();
+
+    Equal(7L, GameCatalogVerifier.ParseAndVerify(json, publicKey).Revision, "合法游戏目录未通过签名验证。");
+    var tampered = JsonSerializer.Serialize(catalog with { Revision = 8 });
+    Throws<InvalidDataException>(() => GameCatalogVerifier.ParseAndVerify(tampered, publicKey), "篡改游戏目录未被拒绝。");
+
+    var matches = GameDiscoveryService.Match(catalog, new[]
+    {
+        new RunningGameProcess(42, Path.Combine(testRoot, "TestGame.exe")),
+    });
+    Equal(1, matches.Count, "运行中的已知游戏未被识别。");
+
+    var cachePath = Path.Combine(testRoot, "catalog", "game-catalog.json");
+    var requests = new List<Uri>();
+    using (var onlineClient = new HttpClient(new DelegateHttpMessageHandler(request =>
+    {
+        requests.Add(request.RequestUri!);
+        return request.RequestUri!.Host == "proxy.example"
+            ? new HttpResponseMessage(HttpStatusCode.BadGateway)
+            : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) };
+    })))
+    {
+        var fetched = await new GameCatalogClient(onlineClient, cachePath, publicKey).FetchAsync(new UpdateNetworkOptions
+        {
+            UrlRoutes = new[]
+            {
+                new UpdateUrlRoute { BaseUrl = "https://proxy.example", Priority = 10 },
+                UpdateUrlRoute.Direct with { Priority = 1 },
+            },
+        });
+        False(fetched.UsedCachedCopy, "在线目录被错误标记为缓存。");
+        Equal(2, requests.Count, "游戏目录没有在前缀线路失败后切换直连。");
+    }
+
+    using var offlineClient = new HttpClient(new DelegateHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+    var cached = await new GameCatalogClient(offlineClient, cachePath, publicKey).FetchAsync();
+    True(cached.UsedCachedCopy, "在线失败后没有回退到已验证缓存。");
+
+    var olderCatalog = catalog with { Revision = 6, Signature = string.Empty };
+    var olderSignature = signer.SignData(
+        olderCatalog.GetCanonicalPayload(),
+        HashAlgorithmName.SHA256,
+        DSASignatureFormat.Rfc3279DerSequence);
+    var olderJson = JsonSerializer.Serialize(olderCatalog with { Signature = Convert.ToBase64String(olderSignature) });
+    using var replayClient = new HttpClient(new DelegateHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+    {
+        Content = new StringContent(olderJson),
+    }));
+    var replayResult = await new GameCatalogClient(replayClient, cachePath, publicKey).FetchAsync();
+    True(replayResult.UsedCachedCopy, "旧的合法签名目录覆盖了较新的可信缓存。");
+    Equal(7L, replayResult.Catalog.Revision, "目录重放后可信缓存修订号发生回退。");
 }
 
 async Task TestGameBackupMonitorAsync()
@@ -429,6 +625,12 @@ async Task TestBackupDirectoryManagerAsync()
     var profileId = Guid.NewGuid();
     await new SnapshotStore().CreateAsync(profileId, save, oldBackup, "迁移测试");
     var manager = new BackupDirectoryManager();
+
+    var emptyTarget = Path.Combine(root, "empty-target");
+    await manager.EnsureWritableAsync(emptyTarget);
+    True(Directory.Exists(emptyTarget), "无现有备份时没有创建并验证新目录。");
+    False(Directory.EnumerateFiles(emptyTarget, ".pathecho-write-test-*.tmp").Any(), "目录可写性探针未清理。");
+    False(await manager.MoveProfileAsync(Guid.NewGuid(), oldBackup, emptyTarget), "不存在的游戏备份被错误报告为已迁移。");
 
     var moved = await manager.MoveProfileAsync(profileId, oldBackup, newBackup);
     True(moved, "备份目录迁移未执行。");
@@ -599,10 +801,10 @@ static void CreateUpdatePackage(string path, bool malicious)
     }
 }
 
-static async Task<int> RunUpdaterValidationAsync(string package)
+async Task<int> RunUpdaterValidationAsync(string package)
 {
     var updater = Path.Combine(
-        Environment.CurrentDirectory,
+        repositoryRoot,
         "temp",
         "build",
         "PathEcho.Updater",
@@ -696,6 +898,22 @@ static void DeleteTree(string path)
     }
 
     Directory.Delete(path, true);
+}
+
+static string FindRepositoryRoot()
+{
+    var current = new DirectoryInfo(AppContext.BaseDirectory);
+    while (current is not null)
+    {
+        if (File.Exists(Path.Combine(current.FullName, "PathEcho.sln")))
+        {
+            return current.FullName;
+        }
+
+        current = current.Parent;
+    }
+
+    throw new DirectoryNotFoundException("无法定位 PathEcho 仓库根目录。");
 }
 
 sealed class EmptyOccupancyService : IFileOccupancyService

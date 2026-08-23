@@ -1,0 +1,41 @@
+name: Sign game catalog
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - config/game-catalog.source.json
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.424
+      - name: Sign catalog
+        shell: powershell
+        env:
+          PATHECHO_UPDATE_PRIVATE_KEY: ${{ secrets.PATHECHO_UPDATE_PRIVATE_KEY }}
+        run: |
+          $key = Join-Path $env:RUNNER_TEMP "pathecho-catalog-private.pem"
+          try {
+            [IO.File]::WriteAllText($key, $env:PATHECHO_UPDATE_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
+            dotnet run --project build/PathEcho.ReleaseTool/PathEcho.ReleaseTool.csproj -c Release -- catalog $key config/game-catalog.source.json config/game-catalog.json
+          } finally {
+            Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
+          }
+      - name: Commit signed catalog
+        shell: powershell
+        run: |
+          if (git diff --quiet -- config/game-catalog.json) { exit 0 }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add config/game-catalog.json
+          git commit -m "chore: update signed game catalog"
+          git push

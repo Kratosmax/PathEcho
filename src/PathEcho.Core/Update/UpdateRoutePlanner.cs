@@ -8,6 +8,7 @@ public static class UpdateRoutePlanner
     {
         "api.github.com",
         "github.com",
+        "raw.githubusercontent.com",
     };
 
     private static readonly HashSet<string> AllowedRedirectHosts = new(StringComparer.OrdinalIgnoreCase)
@@ -69,7 +70,7 @@ public static class UpdateRoutePlanner
         ArgumentNullException.ThrowIfNull(originalUri);
         if (!originalUri.IsAbsoluteUri || !AllowedOriginalHosts.Contains(originalUri.Host))
         {
-            throw new InvalidDataException("更新 URL 必须来自允许的 GitHub 域名。");
+            throw new InvalidDataException("请求 URL 必须来自允许的 GitHub 域名。");
         }
 
         var normalized = Normalize(options);

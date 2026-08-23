@@ -44,22 +44,7 @@ public partial class MainWindow : Window
         SyncGrid.ItemsSource = _syncTaskView;
         SyncStatusFilter.ItemsSource = new[] { "全部状态", "可用", "目录异常", "同步中", "失败" };
         SyncStatusFilter.SelectedIndex = 0;
-        StartupCheck.IsChecked = runtime.Configuration.StartWithWindows;
-        MinimizedCheck.IsChecked = runtime.Configuration.StartMinimized;
-        UpdateCheck.IsChecked = runtime.Configuration.CheckForUpdates;
-        DebugLogCheck.IsChecked = runtime.Configuration.EnableDebugLogging;
-        foreach (var route in runtime.Configuration.UpdateNetwork.UrlRoutes)
-        {
-            UpdateRoutes.Add(new UpdateRouteRow(route));
-        }
-
-        if (UpdateRoutes.All(route => !route.IsDirect))
-        {
-            UpdateRoutes.Add(new UpdateRouteRow(UpdateUrlRoute.Direct));
-        }
-
-        HttpProxyBox.Text = runtime.Configuration.UpdateNetwork.HttpProxy ?? string.Empty;
-        BackupDirectoryBox.Text = runtime.Configuration.DefaultBackupDirectory;
+        ReloadSettingsControls();
         BackgroundStatusText.Text = runtime.IsPreviewMode ? "预览模式 · 未启动监听" : "后台监听已启用";
         BackgroundStatusText.Foreground = runtime.IsPreviewMode
             ? new SolidColorBrush(MediaColor.FromRgb(102, 115, 110))
@@ -67,6 +52,7 @@ public partial class MainWindow : Window
         runtime.SyncTasks.CollectionChanged += OnCollectionChanged;
         runtime.GameProfiles.CollectionChanged += OnCollectionChanged;
         runtime.History.CollectionChanged += OnCollectionChanged;
+        runtime.SyncRuns.CollectionChanged += OnCollectionChanged;
         UpdateEmptyStates();
     }
 
@@ -94,6 +80,8 @@ public partial class MainWindow : Window
         GameGrid.Visibility = _runtime.GameProfiles.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         HistoryEmpty.Visibility = _runtime.History.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         HistoryGrid.Visibility = _runtime.History.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        SyncRunsEmpty.Visibility = _runtime.SyncRuns.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        SyncRunsGrid.Visibility = _runtime.SyncRuns.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void OnNavigate(object sender, RoutedEventArgs e)
@@ -102,7 +90,17 @@ public partial class MainWindow : Window
         SelectView(selected);
     }
 
-    public void SelectPreviewView(string selected) => SelectView(selected);
+    public void SelectPreviewView(string selected)
+    {
+        if (string.Equals(selected, "SyncRuns", StringComparison.Ordinal))
+        {
+            SelectView("History");
+            HistoryTabs.SelectedIndex = 1;
+            return;
+        }
+
+        SelectView(selected);
+    }
 
     public void SelectFirstSyncTaskForPreview()
     {
@@ -141,7 +139,12 @@ public partial class MainWindow : Window
 
     private async void OnAddGame(object sender, RoutedEventArgs e)
     {
-        var dialog = new GameProfileEditorWindow { Owner = this };
+        await AddGameAsync();
+    }
+
+    private async Task AddGameAsync(PathEcho.Core.GameCatalog.DiscoveredGame? discoveredGame = null)
+    {
+        var dialog = new GameProfileEditorWindow(discoveredGame) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.Result is null)
         {
             return;
@@ -152,6 +155,28 @@ public partial class MainWindow : Window
             await _runtime.AddGameProfileAsync(dialog.Result);
             StatusText.Text = "游戏存档已添加";
         });
+    }
+
+    private async void OnDiscoverGames(object sender, RoutedEventArgs e)
+    {
+        GameDiscoveryOutcome? outcome = null;
+        await RunUiActionAsync("正在通过 GitHub 规则识别运行中的游戏", async () =>
+        {
+            outcome = await _runtime.DiscoverRunningGamesAsync();
+            StatusText.Text = outcome.UsedCachedCopy
+                ? $"已使用可信缓存，识别到 {outcome.Matches.Count} 个游戏"
+                : $"规则已更新，识别到 {outcome.Matches.Count} 个游戏";
+        });
+        if (outcome is null)
+        {
+            return;
+        }
+
+        var discovery = new GameDiscoveryWindow(outcome) { Owner = this };
+        if (discovery.ShowDialog() == true && discovery.SelectedGame is not null)
+        {
+            await AddGameAsync(discovery.SelectedGame);
+        }
     }
 
     private async void OnRunSyncRow(object sender, RoutedEventArgs e)
@@ -172,6 +197,36 @@ public partial class MainWindow : Window
             StatusText.Text = $"{row.Name} 同步完成";
         });
         RefreshSyncFilter();
+    }
+
+    private async void OnPreviewSync(object sender, RoutedEventArgs e)
+    {
+        if (SyncGrid.SelectedItem is SyncTaskRow row)
+        {
+            await PreviewSyncAsync(row);
+        }
+    }
+
+    private async void OnPreviewSyncMenu(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is SyncTaskRow row)
+        {
+            await PreviewSyncAsync(row);
+        }
+    }
+
+    private async Task PreviewSyncAsync(SyncTaskRow row)
+    {
+        PathEcho.Core.Sync.SyncPreviewResult? preview = null;
+        await RunUiActionAsync($"正在预演 {row.Name}", async () =>
+        {
+            preview = await _runtime.PreviewSyncAsync(row.Definition.Id);
+            StatusText.Text = $"{row.Name} 预演完成";
+        });
+        if (preview is not null)
+        {
+            new SyncPreviewWindow(row.Name, preview) { Owner = this }.ShowDialog();
+        }
     }
 
     private async void OnRunAllSync(object sender, RoutedEventArgs e)
@@ -206,6 +261,7 @@ public partial class MainWindow : Window
         await RunUiActionAsync("正在刷新版本历史", async () =>
         {
             await _runtime.RefreshHistoryAsync();
+            await _runtime.RefreshSyncRunHistoryAsync();
             StatusText.Text = $"已找到 {_runtime.History.Count} 个备份版本";
         });
     }
@@ -270,35 +326,102 @@ public partial class MainWindow : Window
         });
     }
 
-    private void OnBrowseDefaultBackup(object sender, RoutedEventArgs e)
+    private async void OnBrowseDefaultBackup(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog();
-        if (dialog.ShowDialog() == true)
+        if (dialog.ShowDialog() != true)
         {
-            BackupDirectoryBox.Text = dialog.FolderName;
+            return;
         }
+
+        var selectedDirectory = Path.GetFullPath(dialog.FolderName);
+        if (string.Equals(
+                selectedDirectory,
+                Path.GetFullPath(_runtime.Configuration.DefaultBackupDirectory),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            BackupDirectoryBox.Text = selectedDirectory;
+            StatusText.Text = "默认备份目录未更改";
+            return;
+        }
+
+        var prompt = new PromptWindow(
+            this,
+            "更改默认备份目录",
+            $"将默认备份目录更改为：\n{selectedDirectory}\n\n使用默认目录的现有游戏备份将迁移到新位置。",
+            "更改并保存",
+            "取消");
+        prompt.ShowDialog();
+        if (prompt.Choice != PromptChoice.Primary)
+        {
+            return;
+        }
+
+        BackupDirectoryBox.Text = selectedDirectory;
+        await SaveSettingsFromControlsAsync();
     }
 
     private async void OnSaveSettings(object sender, RoutedEventArgs e)
     {
+        await SaveSettingsFromControlsAsync();
+    }
+
+    private async Task SaveSettingsFromControlsAsync()
+    {
+        if (!UpdateRoutesGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+            !UpdateRoutesGrid.CommitEdit(DataGridEditingUnit.Row, true))
+        {
+            ShowError("更新线路中有尚未通过校验的内容，请修正后再保存。");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(BackupDirectoryBox.Text))
         {
             ShowError("默认备份目录不能为空。");
             return;
         }
 
+        SettingsSaveResult? result = null;
         await RunUiActionAsync("正在保存设置并校验备份目录", async () =>
         {
-            await _runtime.SaveSettingsAsync(
+            result = await _runtime.SaveSettingsAsync(
                 StartupCheck.IsChecked == true,
                 MinimizedCheck.IsChecked == true,
                 UpdateCheck.IsChecked == true,
                 DebugLogCheck.IsChecked == true,
                 BackupDirectoryBox.Text.Trim(),
                 BuildUpdateNetworkOptions());
-            BackupDirectoryBox.Text = _runtime.Configuration.DefaultBackupDirectory;
-            StatusText.Text = "设置已保存";
+            ReloadSettingsControls();
+            StatusText.Text = result.MovedBackupProfiles > 0
+                ? $"设置已保存，已迁移 {result.MovedBackupProfiles} 个游戏备份"
+                : result.BackupRootChanged
+                    ? "设置已保存，新目录已验证；暂无现有备份需要迁移"
+                    : "设置已保存";
         });
+        if (!string.IsNullOrWhiteSpace(result?.StartupWarning))
+        {
+            new PromptWindow(this, "设置已保存，但有一项未生效", result.StartupWarning, "关闭").ShowDialog();
+        }
+    }
+
+    private void ReloadSettingsControls()
+    {
+        StartupCheck.IsChecked = _runtime.Configuration.StartWithWindows;
+        MinimizedCheck.IsChecked = _runtime.Configuration.StartMinimized;
+        UpdateCheck.IsChecked = _runtime.Configuration.CheckForUpdates;
+        DebugLogCheck.IsChecked = _runtime.Configuration.EnableDebugLogging;
+        BackupDirectoryBox.Text = _runtime.Configuration.DefaultBackupDirectory;
+        HttpProxyBox.Text = _runtime.Configuration.UpdateNetwork.HttpProxy ?? string.Empty;
+        UpdateRoutes.Clear();
+        foreach (var route in _runtime.Configuration.UpdateNetwork.UrlRoutes)
+        {
+            UpdateRoutes.Add(new UpdateRouteRow(route));
+        }
+
+        if (UpdateRoutes.All(route => !route.IsDirect))
+        {
+            UpdateRoutes.Add(new UpdateRouteRow(UpdateUrlRoute.Direct));
+        }
     }
 
     private void OnCheckForUpdates(object sender, RoutedEventArgs e)
@@ -437,6 +560,7 @@ public partial class MainWindow : Window
         var visibility = SyncGrid.SelectedItem is SyncTaskRow ? Visibility.Visible : Visibility.Collapsed;
         EditSyncButton.Visibility = visibility;
         DeleteSyncButton.Visibility = visibility;
+        PreviewSyncButton.Visibility = visibility;
         UpdateEmptyStates();
     }
 

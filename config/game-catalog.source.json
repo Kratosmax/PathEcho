@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "revision": 1,
+  "games": [
+    {
+      "id": "minecraft-java",
+      "name": "Minecraft: Java Edition",
+      "executables": [ "Minecraft.exe" ],
+      "savePathTemplates": [ "{RoamingAppData}\\.minecraft\\saves" ]
+    },
+    {
+      "id": "stardew-valley",
+      "name": "Stardew Valley",
+      "executables": [ "Stardew Valley.exe" ],
+      "savePathTemplates": [ "{RoamingAppData}\\StardewValley\\Saves" ]
+    },
+    {
+      "id": "terraria",
+      "name": "Terraria",
+      "executables": [ "Terraria.exe" ],
+      "savePathTemplates": [ "{Documents}\\My Games\\Terraria" ]
+    },
+    {
+      "id": "cyberpunk-2077",
+      "name": "Cyberpunk 2077",
+      "executables": [ "Cyberpunk2077.exe" ],
+      "savePathTemplates": [ "{SavedGames}\\CD Projekt Red\\Cyberpunk 2077" ]
+    },
+    {
+      "id": "the-witcher-3",
+      "name": "The Witcher 3",
+      "executables": [ "witcher3.exe" ],
+      "savePathTemplates": [ "{Documents}\\The Witcher 3\\gamesaves" ]
+    },
+    {
+      "id": "hollow-knight",
+      "name": "Hollow Knight",
+      "executables": [ "hollow_knight.exe" ],
+      "savePathTemplates": [ "{UserProfile}\\AppData\\LocalLow\\Team Cherry\\Hollow Knight" ]
+    },
+    {
+      "id": "palworld",
+      "name": "Palworld",
+      "executables": [ "Palworld-Win64-Shipping.exe" ],
+      "savePathTemplates": [ "{LocalAppData}\\Pal\\Saved\\SaveGames" ]
+    },
+    {
+      "id": "baldurs-gate-3",
+      "name": "Baldur's Gate 3",
+      "executables": [ "bg3.exe", "bg3_dx11.exe" ],
+      "savePathTemplates": [ "{LocalAppData}\\Larian Studios\\Baldur's Gate 3\\PlayerProfiles" ]
+    }
+  ]
+}

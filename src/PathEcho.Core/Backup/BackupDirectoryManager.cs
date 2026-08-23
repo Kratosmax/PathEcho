@@ -14,6 +14,33 @@ public sealed class BackupDirectoryManager
 {
     private static readonly JsonSerializerOptions SerializerOptions = new();
 
+    public async Task EnsureWritableAsync(string backupDirectory, CancellationToken cancellationToken = default)
+    {
+        var root = NormalizeRoot(backupDirectory);
+        Directory.CreateDirectory(root);
+        var probe = Path.Combine(root, $".pathecho-write-test-{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using var stream = new FileStream(
+                probe,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                FileOptions.Asynchronous | FileOptions.WriteThrough);
+            await stream.WriteAsync("PathEcho"u8.ToArray(), cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            stream.Flush(flushToDisk: true);
+        }
+        finally
+        {
+            if (File.Exists(probe))
+            {
+                File.Delete(probe);
+            }
+        }
+    }
+
     public async Task<bool> MoveProfileAsync(
         Guid profileId,
         string oldBackupDirectory,
@@ -27,13 +54,13 @@ public sealed class BackupDirectoryManager
             return false;
         }
 
-        ValidateSeparateRoots(oldRoot, newRoot);
         var source = Path.Combine(oldRoot, profileId.ToString("N"));
         if (!Directory.Exists(source))
         {
             return false;
         }
 
+        ValidateSeparateRoots(oldRoot, newRoot);
         Directory.CreateDirectory(newRoot);
         var destination = Path.Combine(newRoot, profileId.ToString("N"));
         if (Directory.Exists(destination))
