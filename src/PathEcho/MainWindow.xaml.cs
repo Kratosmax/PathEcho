@@ -25,6 +25,8 @@ public partial class MainWindow : Window
 {
     private readonly PathEchoRuntime _runtime;
     private readonly ICollectionView _syncTaskView;
+    private string _selectedView = "Sync";
+    private string _settingsSnapshot = string.Empty;
 
     public ObservableCollection<UpdateRouteRow> UpdateRoutes { get; } = new();
 
@@ -87,6 +89,16 @@ public partial class MainWindow : Window
     private void OnNavigate(object sender, RoutedEventArgs e)
     {
         var selected = (sender as Button)?.Tag as string ?? "Sync";
+        if (_selectedView == "Settings" && selected != "Settings" && HasUnsavedSettings())
+        {
+            if (!UnsavedChangesGuard.ConfirmDiscard(this))
+            {
+                return;
+            }
+
+            ReloadSettingsControls();
+        }
+
         SelectView(selected);
     }
 
@@ -109,6 +121,7 @@ public partial class MainWindow : Window
 
     private void SelectView(string selected)
     {
+        _selectedView = selected;
         SyncView.Visibility = selected == "Sync" ? Visibility.Visible : Visibility.Collapsed;
         GameView.Visibility = selected == "Game" ? Visibility.Visible : Visibility.Collapsed;
         HistoryView.Visibility = selected == "History" ? Visibility.Visible : Visibility.Collapsed;
@@ -422,7 +435,29 @@ public partial class MainWindow : Window
         {
             UpdateRoutes.Add(new UpdateRouteRow(UpdateUrlRoute.Direct));
         }
+
+        _settingsSnapshot = CaptureSettingsState();
     }
+
+    private bool HasUnsavedSettings()
+    {
+        if (!UpdateRoutesGrid.CommitEdit(DataGridEditingUnit.Cell, true) ||
+            !UpdateRoutesGrid.CommitEdit(DataGridEditingUnit.Row, true))
+        {
+            return true;
+        }
+
+        return !string.Equals(_settingsSnapshot, CaptureSettingsState(), StringComparison.Ordinal);
+    }
+
+    private string CaptureSettingsState() => string.Join('\u001f',
+        StartupCheck.IsChecked,
+        MinimizedCheck.IsChecked,
+        UpdateCheck.IsChecked,
+        DebugLogCheck.IsChecked,
+        BackupDirectoryBox.Text,
+        HttpProxyBox.Text,
+        string.Join('\u001e', UpdateRoutes.Select(route => $"{route.IsDirect}\u001d{route.BaseUrl}\u001d{route.Priority}")));
 
     private void OnCheckForUpdates(object sender, RoutedEventArgs e)
     {

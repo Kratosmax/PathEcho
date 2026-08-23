@@ -96,6 +96,7 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
             cancellationToken).ConfigureAwait(false);
 
         var launcher = PrepareLauncher(updateRoot);
+        var resultPath = Path.Combine(updateRoot, $"result-{manifest.Version}-{Guid.NewGuid():N}.json");
         var process = Process.GetCurrentProcess();
         var start = new ProcessStartInfo(Path.Combine(launcher, "PathEcho.Updater.exe"))
         {
@@ -110,21 +111,46 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
             "--target", Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory),
             "--pid", Environment.ProcessId.ToString(),
             "--process-start-filetime", process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString(),
+            "--result", resultPath,
         })
         {
             start.ArgumentList.Add(argument);
         }
 
-        _ = Process.Start(start) ?? throw new InvalidOperationException("无法启动外部更新器。");
+        using var updaterProcess = Process.Start(start) ?? throw new InvalidOperationException("无法启动外部更新器。");
+        await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken).ConfigureAwait(false);
+        if (updaterProcess.HasExited)
+        {
+            var detail = TryReadUpdateFailure(resultPath);
+            throw new InvalidOperationException(
+                $"外部更新器启动后立即退出（代码 {updaterProcess.ExitCode}）。{detail}");
+        }
     }
 
     public void Dispose() => _httpClient.Dispose();
+
+    private static string TryReadUpdateFailure(string resultPath)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(resultPath));
+            return document.RootElement.GetProperty("Message").GetString() ?? string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
 
     private static string PrepareLauncher(string updateRoot)
     {
         var launcher = Path.Combine(updateRoot, "launcher", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(launcher);
-        var updaterFiles = Directory.EnumerateFiles(AppContext.BaseDirectory, "PathEcho.Updater*").ToArray();
+        var updaterFiles = Directory.EnumerateFiles(AppContext.BaseDirectory)
+            .Where(file =>
+                Path.GetFileName(file).StartsWith("PathEcho.Updater", StringComparison.OrdinalIgnoreCase) ||
+                Path.GetFileName(file).StartsWith("PathEcho.Core", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         if (!updaterFiles.Any(file => string.Equals(Path.GetFileName(file), "PathEcho.Updater.exe", StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidOperationException("安装目录缺少 PathEcho 更新器。");

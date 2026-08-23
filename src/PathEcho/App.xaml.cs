@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -66,6 +67,9 @@ public partial class App : System.Windows.Application
             ShowMainWindow();
         }
 
+        SignalUpdateReady(e.Args);
+        ShowUpdateResult(e.Args);
+
         if (!previewMode && _runtime.Configuration.CheckForUpdates)
         {
             _ = _mainWindow.CheckForUpdatesInBackgroundAsync();
@@ -104,6 +108,69 @@ public partial class App : System.Windows.Application
 
         _mainWindow.Activate();
         _activationRequested = false;
+    }
+
+    private void ShowUpdateResult(string[] arguments)
+    {
+        var path = GetUpdateStatePath(arguments, "--update-result");
+        if (path is null)
+        {
+            return;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            var succeeded = string.Equals(root.GetProperty("Status").GetString(), "succeeded", StringComparison.Ordinal);
+            var message = root.GetProperty("Message").GetString() ?? "更新流程已结束。";
+            ShowMainWindow();
+            System.Windows.MessageBox.Show(
+                message,
+                succeeded ? "PathEcho 更新完成" : "PathEcho 更新失败",
+                MessageBoxButton.OK,
+                succeeded ? MessageBoxImage.Information : MessageBoxImage.Error);
+            File.Delete(path);
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("Unable to read update result.", exception);
+        }
+    }
+
+    private static void SignalUpdateReady(string[] arguments)
+    {
+        var path = GetUpdateStatePath(arguments, "--update-ready");
+        if (path is null)
+        {
+            return;
+        }
+
+        var temporary = path + $".{Environment.ProcessId}.tmp";
+        File.WriteAllText(temporary, "ready");
+        File.Move(temporary, path, true);
+    }
+
+    private static string? GetUpdateStatePath(string[] arguments, string name)
+    {
+        var index = Array.FindIndex(arguments, argument => string.Equals(argument, name, StringComparison.OrdinalIgnoreCase));
+        if (index < 0 || index + 1 >= arguments.Length)
+        {
+            return null;
+        }
+
+        var path = Path.GetFullPath(arguments[index + 1]);
+        var updateRoot = Path.GetFullPath(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PathEcho",
+            "Update"));
+        var relative = Path.GetRelativePath(updateRoot, path);
+        if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("更新状态文件不在允许的目录中。");
+        }
+
+        return path;
     }
 
     private void RequestMainWindowActivation()

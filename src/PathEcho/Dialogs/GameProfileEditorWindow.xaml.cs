@@ -9,6 +9,8 @@ namespace PathEcho.Dialogs;
 
 public partial class GameProfileEditorWindow : Window
 {
+    private readonly UnsavedChangesGuard _unsavedChanges;
+
     public GameProfileEditorWindow(DiscoveredGame? discoveredGame = null)
     {
         InitializeComponent();
@@ -20,6 +22,8 @@ public partial class GameProfileEditorWindow : Window
             ProcessPathBox.Text = discoveredGame.ExecutablePath;
             ProcessCheck.IsChecked = true;
         }
+
+        _unsavedChanges = new UnsavedChangesGuard(this, CaptureState);
     }
 
     public GameBackupProfile? Result { get; private set; }
@@ -84,6 +88,7 @@ public partial class GameProfileEditorWindow : Window
                 ProcessExecutablePath = string.IsNullOrWhiteSpace(ProcessPathBox.Text) ? null : ProcessPathBox.Text.Trim(),
             };
             Result.Validate();
+            _unsavedChanges.MarkSaved();
             DialogResult = true;
         }
         catch (Exception exception)
@@ -111,4 +116,18 @@ public partial class GameProfileEditorWindow : Window
 
         return parsed;
     }
+
+    private string CaptureState() => string.Join('\u001f',
+        NameBox.Text,
+        SavePathBox.Text,
+        BackupPathBox.Text,
+        ScheduledCheck.IsChecked,
+        ImportantCheck.IsChecked,
+        ChangedCheck.IsChecked,
+        ProcessCheck.IsChecked,
+        ScheduleBox.Text,
+        MinimumBox.Text,
+        VersionsBox.Text,
+        PatternsBox.Text,
+        ProcessPathBox.Text);
 }

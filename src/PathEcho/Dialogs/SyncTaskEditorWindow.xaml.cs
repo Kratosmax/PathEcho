@@ -8,6 +8,7 @@ namespace PathEcho.Dialogs;
 public partial class SyncTaskEditorWindow : Window
 {
     private readonly Guid? _existingId;
+    private readonly UnsavedChangesGuard _unsavedChanges;
 
     public SyncTaskEditorWindow(SyncTaskDefinition? task = null, bool duplicate = false)
     {
@@ -35,6 +36,8 @@ public partial class SyncTaskEditorWindow : Window
             IncludePatternsBox.Text = string.Join(Environment.NewLine, task.Filters?.IncludePatterns ?? Array.Empty<string>());
             ExcludePatternsBox.Text = string.Join(Environment.NewLine, task.Filters?.ExcludePatterns ?? Array.Empty<string>());
         }
+
+        _unsavedChanges = new UnsavedChangesGuard(this, CaptureState);
     }
 
     public SyncTaskDefinition? Result { get; private set; }
@@ -73,6 +76,7 @@ public partial class SyncTaskEditorWindow : Window
                 },
             };
             Result.Validate();
+            _unsavedChanges.MarkSaved();
             DialogResult = true;
         }
         catch (Exception exception)
@@ -83,4 +87,15 @@ public partial class SyncTaskEditorWindow : Window
 
     private static string[] SplitPatterns(string value) =>
         value.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private string CaptureState() => string.Join('\u001f',
+        NameBox.Text,
+        LeftPathBox.Text,
+        RightPathBox.Text,
+        ModeBox.SelectedIndex,
+        DeletionBox.SelectedIndex,
+        ConflictBox.SelectedIndex,
+        AutoStartCheck.IsChecked,
+        IncludePatternsBox.Text,
+        ExcludePatternsBox.Text);
 }

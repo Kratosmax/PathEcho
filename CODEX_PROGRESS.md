@@ -18,8 +18,8 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-23，Asia/Shanghai。
-- 版本：`0.2.2`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；`0.2.2` 发布代码基线为 `91111ad3651db3310322e8cb2414c64e94dc2f53`，正式 `v0.2.2` 标签固定指向该提交；发布核验文档提交位于标签之后，不移动已发布标签。
+- 版本：`0.2.5`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 分支：`main`；`0.2.5` 发布准备中，历史正式标签保持固定，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
@@ -167,4 +167,6 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前已发布版本：`0.2.4`；`v0.2.3` 因 ReleaseTool 编译失败未发布，历史 `v0.2.2` 发布记录保持不变。
+> 当前发布准备版本：`0.2.5`；`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+
+`0.2.5` 本地验证：Release 构建与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 23/23 通过。Lite 预览包 `temp/preview-0.2.5/PathEcho-0.2.5-Lite.zip` 为 517664 字节，SHA-256 `F92DA1896A167658469F31B6780010A2DF532C1AE72230B94773A618FEDAF7F4`，包内更新器预检返回 0；真实 WPF 设置页截图位于 `temp/preview-0.2.5/settings.png`。线上 `v0.2.4` 旧更新器在 `temp/update-e2e-0.2.4` 隔离环境完成等待、替换和重启，退出码 0；因此旧版问题不是干净环境必现，但旧代码缺少失败反馈。

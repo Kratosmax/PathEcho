@@ -1,13 +1,34 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text.Json;
 using PathEcho.Core.Update;
 
+string? resultPath = null;
+string? target = null;
+var installValidated = false;
+var parentExited = false;
 try
 {
     var options = ParseArguments(args);
+    resultPath = options.TryGetValue("result", out var configuredResultPath)
+        ? Path.GetFullPath(configuredResultPath)
+        : null;
     var package = RequirePath(options, "package");
     var verifyOnly = options.TryGetValue("verify-only", out var verifyOnlyValue) && bool.Parse(verifyOnlyValue);
+    if (!verifyOnly)
+    {
+        if (resultPath is null)
+        {
+            throw new ArgumentException("缺少更新结果文件参数：--result");
+        }
+
+        target = RequirePath(options, "target");
+        EnsureLauncherIsExternal(target);
+        ValidateInstallRoot(target);
+        installValidated = true;
+    }
+
     UpdateManifest? manifest = null;
     string expectedHash;
     string expectedChannel;
@@ -34,19 +55,23 @@ try
         return 0;
     }
 
-    var target = RequirePath(options, "target");
     var processId = int.Parse(RequireValue(options, "pid"));
     var processStartedAt = long.Parse(RequireValue(options, "process-start-filetime"));
     var previewRestart = options.TryGetValue("preview-restart", out var previewRestartValue) && bool.Parse(previewRestartValue);
 
-    EnsureLauncherIsExternal(target);
-    ValidateInstallRoot(target);
     await WaitForVerifiedProcessExitAsync(processId, processStartedAt);
-    ApplyPackage(package, target, expectedVersion, previewRestart);
+    parentExited = true;
+    await ApplyPackageAsync(package, target!, expectedVersion, previewRestart, resultPath!);
     return 0;
 }
 catch (Exception exception)
 {
+    TryWriteResult(resultPath, "failed", exception.Message);
+    if (installValidated && parentExited && target is not null)
+    {
+        TryRestartAfterFailure(target, resultPath);
+    }
+
     Console.Error.WriteLine($"PathEcho 更新失败，现有安装应保持不变或已经回滚。{exception.Message}");
     return 1;
 }
@@ -128,7 +153,7 @@ static async Task WaitForVerifiedProcessExitAsync(int processId, long expectedSt
     }
 }
 
-static void ApplyPackage(string package, string target, string version, bool previewRestart)
+static async Task ApplyPackageAsync(string package, string target, string version, bool previewRestart, string resultPath)
 {
     var parent = Path.GetDirectoryName(target) ?? throw new InvalidOperationException("安装目录缺少父目录。");
     var token = Guid.NewGuid().ToString("N");
@@ -147,15 +172,24 @@ static void ApplyPackage(string package, string target, string version, bool pre
         PreserveInstallerFiles(backup, target);
 
         var executable = Path.Combine(target, "PathEcho.exe");
+        var readyPath = resultPath + ".ready";
+        TryDeleteFile(readyPath);
         var start = new ProcessStartInfo(executable) { UseShellExecute = true };
         start.ArgumentList.Add("--updated-from");
         start.ArgumentList.Add(version);
+        TryWriteResult(resultPath, "succeeded", $"PathEcho 已更新到 {version}。");
+        start.ArgumentList.Add("--update-result");
+        start.ArgumentList.Add(resultPath);
+        start.ArgumentList.Add("--update-ready");
+        start.ArgumentList.Add(readyPath);
         if (previewRestart)
         {
             start.ArgumentList.Add("--preview");
             start.ArgumentList.Add("--preview-seed");
         }
-        _ = Process.Start(start) ?? throw new InvalidOperationException("新版 PathEcho 启动失败。");
+        using var updatedProcess = Process.Start(start) ?? throw new InvalidOperationException("新版 PathEcho 启动失败。");
+        await WaitForReadyAsync(updatedProcess, readyPath);
+        TryDeleteFile(readyPath);
         TryDeleteTree(backup);
     }
     catch
@@ -175,6 +209,98 @@ static void ApplyPackage(string package, string target, string version, bool pre
     finally
     {
         TryDeleteTree(stage);
+    }
+}
+
+static async Task WaitForReadyAsync(Process process, string readyPath)
+{
+    var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+    while (DateTimeOffset.UtcNow < deadline)
+    {
+        if (File.Exists(readyPath))
+        {
+            return;
+        }
+
+        if (process.HasExited)
+        {
+            throw new InvalidOperationException($"新版 PathEcho 在报告就绪前退出（代码 {process.ExitCode}）。");
+        }
+
+        await Task.Delay(100);
+    }
+
+    try
+    {
+        process.Kill(entireProcessTree: true);
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+    catch (InvalidOperationException)
+    {
+    }
+
+    throw new TimeoutException("新版 PathEcho 在 15 秒内未报告就绪，已回滚旧版本。");
+}
+
+static void TryRestartAfterFailure(string target, string? resultPath)
+{
+    try
+    {
+        var executable = Path.Combine(target, "PathEcho.exe");
+        if (!File.Exists(executable))
+        {
+            return;
+        }
+
+        var start = new ProcessStartInfo(executable) { UseShellExecute = true };
+        if (resultPath is not null)
+        {
+            start.ArgumentList.Add("--update-result");
+            start.ArgumentList.Add(resultPath);
+        }
+
+        _ = Process.Start(start);
+    }
+    catch
+    {
+    }
+}
+
+static void TryWriteResult(string? path, string status, string message)
+{
+    if (path is null)
+    {
+        return;
+    }
+
+    try
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(new
+        {
+            Status = status,
+            Message = message,
+            TimestampUtc = DateTimeOffset.UtcNow,
+        }));
+        File.Move(temporary, path, true);
+    }
+    catch
+    {
+    }
+}
+
+static void TryDeleteFile(string path)
+{
+    try
+    {
+        File.Delete(path);
+    }
+    catch (IOException)
+    {
+    }
+    catch (UnauthorizedAccessException)
+    {
     }
 }
 

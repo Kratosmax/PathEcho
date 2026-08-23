@@ -30,6 +30,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("同步运行历史有上限并原子持久化", TestSyncRunHistoryStoreAsync),
     ("只读表格不会进入编辑模式", TestReadOnlyDataGridContractAsync),
     ("设置保存会提交线路表格编辑", TestSettingsGridCommitContractAsync),
+    ("未保存编辑在关闭或离开页面前会确认", TestUnsavedChangesContractAsync),
     ("重复启动会激活主实例且不会错误释放锁", TestSingleInstanceCoordinatorAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
@@ -41,6 +42,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("签名游戏目录可代理获取、识别并回退可信缓存", TestGameCatalogAsync),
     ("更新下载可故障转移并清理失败暂存", TestUpdatePackageDownloadAsync),
     ("更新器拒绝路径穿越包", TestUpdaterPackageValidationAsync),
+    ("更新交接会复制依赖、握手并记录失败", TestUpdateHandoffContractAsync),
 };
 
 try
@@ -346,6 +348,25 @@ Task TestSettingsGridCommitContractAsync()
     True(
         browseHandler.Contains("await SaveSettingsFromControlsAsync();", StringComparison.Ordinal),
         "确认默认备份目录后没有立即保存设置。");
+    return Task.CompletedTask;
+}
+
+Task TestUnsavedChangesContractAsync()
+{
+    var guard = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "UnsavedChangesGuard.cs"));
+    True(guard.Contains("window.Closing += OnClosing", StringComparison.Ordinal), "未保存状态没有接入窗口关闭事件。");
+    True(guard.Contains("ConfirmDiscard", StringComparison.Ordinal), "未保存确认没有形成可复用逻辑。");
+
+    foreach (var editor in new[] { "SyncTaskEditorWindow.xaml.cs", "GameProfileEditorWindow.xaml.cs" })
+    {
+        var source = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", editor));
+        True(source.Contains("new UnsavedChangesGuard", StringComparison.Ordinal), $"{editor} 没有启用未保存确认。");
+        True(source.Contains("MarkSaved()", StringComparison.Ordinal), $"{editor} 保存成功后仍可能误报未保存。");
+    }
+
+    var mainWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml.cs"));
+    True(mainWindow.Contains("HasUnsavedSettings()", StringComparison.Ordinal), "设置页离开时没有检查未保存内容。");
+    True(mainWindow.Contains("UnsavedChangesGuard.ConfirmDiscard(this)", StringComparison.Ordinal), "设置页没有复用未保存确认逻辑。");
     return Task.CompletedTask;
 }
 
@@ -802,6 +823,9 @@ static void CreateUpdatePackage(string path, bool malicious)
 }
 
 async Task<int> RunUpdaterValidationAsync(string package)
+    => await RunUpdaterProcessAsync(package, null, null);
+
+async Task<int> RunUpdaterProcessAsync(string package, string? expectedHash, string? resultPath)
 {
     var updater = Path.Combine(
         repositoryRoot,
@@ -812,7 +836,7 @@ async Task<int> RunUpdaterValidationAsync(string package)
         "net8.0",
         "PathEcho.Updater.exe");
     await using var packageStream = File.OpenRead(package);
-    var hash = Convert.ToHexString(await SHA256.HashDataAsync(packageStream));
+    var hash = expectedHash ?? Convert.ToHexString(await SHA256.HashDataAsync(packageStream));
     var start = new ProcessStartInfo(updater)
     {
         UseShellExecute = false,
@@ -831,9 +855,45 @@ async Task<int> RunUpdaterValidationAsync(string package)
         start.ArgumentList.Add(argument);
     }
 
+    if (resultPath is not null)
+    {
+        start.ArgumentList.Add("--result");
+        start.ArgumentList.Add(resultPath);
+    }
+
     using var process = Process.Start(start) ?? throw new InvalidOperationException("无法启动更新器预检。");
     await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
     return process.ExitCode;
+}
+
+async Task TestUpdateHandoffContractAsync()
+{
+    var service = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Services", "ApplicationUpdateService.cs"));
+    True(service.Contains("StartsWith(\"PathEcho.Core\"", StringComparison.Ordinal), "更新 launcher 没有复制更新器依赖。");
+    True(service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750)", StringComparison.Ordinal), "主程序退出前没有等待更新器启动握手。");
+    True(service.Contains("updaterProcess.HasExited", StringComparison.Ordinal), "主程序没有识别更新器立即退出。");
+    True(service.Contains("\"--result\", resultPath", StringComparison.Ordinal), "主程序没有向更新器传递结果文件。");
+
+    var updater = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho.Updater", "Program.cs"));
+    True(updater.Contains("TryWriteResult(resultPath, \"failed\"", StringComparison.Ordinal), "更新器失败时没有持久化结果。");
+    True(updater.Contains("installValidated && parentExited", StringComparison.Ordinal), "更新器可能在父进程仍运行时错误重启第二实例。");
+    True(updater.Contains("TryRestartAfterFailure", StringComparison.Ordinal), "父进程退出后的更新失败没有恢复可见界面。");
+    True(updater.Contains("await WaitForReadyAsync(updatedProcess, readyPath)", StringComparison.Ordinal), "更新器没有等待新版报告就绪。");
+    var readyWait = updater.IndexOf("await WaitForReadyAsync(updatedProcess, readyPath)", StringComparison.Ordinal);
+    var backupCleanup = updater.IndexOf("TryDeleteTree(backup)", readyWait, StringComparison.Ordinal);
+    True(readyWait >= 0 && backupCleanup > readyWait, "更新器在新版报告就绪前删除了旧版本备份。");
+
+    var app = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "App.xaml.cs"));
+    True(app.Contains("SignalUpdateReady(e.Args)", StringComparison.Ordinal), "新版完成初始化后没有报告就绪。");
+
+    var package = Path.Combine(testRoot, "handoff-package.zip");
+    var resultPath = Path.Combine(testRoot, "update-result.json");
+    CreateUpdatePackage(package, false);
+    var exitCode = await RunUpdaterProcessAsync(package, new string('0', 64), resultPath);
+    True(exitCode != 0, "错误哈希没有让真实更新器失败。");
+    True(File.Exists(resultPath), "真实更新器失败后没有写入结果文件。");
+    using var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultPath));
+    Equal("failed", result.RootElement.GetProperty("Status").GetString() ?? string.Empty, "更新失败结果状态无效。");
 }
 
 static void True(bool condition, string message)

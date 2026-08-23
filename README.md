@@ -1,6 +1,6 @@
 # PathEcho
 
-当前发布版本：`0.2.4`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
+当前发布版本：`0.2.5`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
 
 <img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
 
@@ -12,10 +12,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.2.4-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.2.4-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.2.4-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.2.4-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.2.5-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.2.5-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.2.5-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.2.5-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 

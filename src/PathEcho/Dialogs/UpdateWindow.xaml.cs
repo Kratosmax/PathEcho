@@ -64,8 +64,7 @@ public partial class UpdateWindow : Window
         SetBusy("正在获取并验证更新清单…");
         try
         {
-            _cancellation = new CancellationTokenSource();
-            _result = await _updateService.CheckAsync(_cancellation.Token);
+            _result = await _updateService.CheckAsync(BeginOperation());
             VersionText.Text = $"当前版本 {_result.CurrentVersion}";
             switch (_result.Availability)
             {
@@ -117,8 +116,7 @@ public partial class UpdateWindow : Window
         });
         try
         {
-            _cancellation = new CancellationTokenSource();
-            await _updateService.DownloadAndLaunchAsync(manifest, progress, _cancellation.Token);
+            await _updateService.DownloadAndLaunchAsync(manifest, progress, BeginOperation());
             DownloadProgress.Value = 100;
             StatusText.Text = "验证完成，正在交给外部更新器…";
             PrimaryButton.Content = "正在退出";
@@ -150,5 +148,13 @@ public partial class UpdateWindow : Window
         NotesText.Text = string.Empty;
         PrimaryButton.IsEnabled = false;
         SecondaryButton.IsEnabled = true;
+    }
+
+    private CancellationToken BeginOperation()
+    {
+        _cancellation?.Cancel();
+        _cancellation?.Dispose();
+        _cancellation = new CancellationTokenSource();
+        return _cancellation.Token;
     }
 }
