@@ -167,4 +167,4 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前发布准备版本：`0.2.4`；`v0.2.3` 因 ReleaseTool 编译失败未发布，历史 `v0.2.2` 发布记录保持不变。
+> 当前已发布版本：`0.2.4`；`v0.2.3` 因 ReleaseTool 编译失败未发布，历史 `v0.2.2` 发布记录保持不变。
