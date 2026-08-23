@@ -5,18 +5,18 @@ using PathEcho.Core.Update;
 
 if (args.Length == 4 && string.Equals(args[0], "catalog", StringComparison.Ordinal))
 {
-    var privateKeyPath = Path.GetFullPath(args[1]);
+    var catalogPrivateKeyPath = Path.GetFullPath(args[1]);
     var sourcePath = Path.GetFullPath(args[2]);
-    var outputPath = Path.GetFullPath(args[3]);
+    var catalogOutputPath = Path.GetFullPath(args[3]);
     var sourceJson = await File.ReadAllTextAsync(sourcePath);
     var catalog = JsonSerializer.Deserialize<GameCatalogDocument>(sourceJson, new JsonSerializerOptions
     {
         PropertyNameCaseInsensitive = true,
     }) ?? throw new InvalidDataException("游戏目录源文件为空。");
     GameCatalogVerifier.Validate(catalog);
-    if (File.Exists(outputPath))
+    if (File.Exists(catalogOutputPath))
     {
-        var current = GameCatalogVerifier.ParseAndVerify(await File.ReadAllTextAsync(outputPath));
+        var current = GameCatalogVerifier.ParseAndVerify(await File.ReadAllTextAsync(catalogOutputPath));
         if (catalog.GetCanonicalPayload().SequenceEqual(current.GetCanonicalPayload()))
         {
             return 0;
@@ -29,7 +29,7 @@ if (args.Length == 4 && string.Equals(args[0], "catalog", StringComparison.Ordin
     }
 
     using var catalogSigner = ECDsa.Create();
-    catalogSigner.ImportFromPem(await File.ReadAllTextAsync(privateKeyPath));
+    catalogSigner.ImportFromPem(await File.ReadAllTextAsync(catalogPrivateKeyPath));
     var catalogSignature = catalogSigner.SignData(
         catalog.GetCanonicalPayload(),
         HashAlgorithmName.SHA256,
@@ -37,8 +37,8 @@ if (args.Length == 4 && string.Equals(args[0], "catalog", StringComparison.Ordin
     catalog = catalog with { Signature = Convert.ToBase64String(catalogSignature) };
     var catalogJson = JsonSerializer.Serialize(catalog, new JsonSerializerOptions { WriteIndented = true });
     _ = GameCatalogVerifier.ParseAndVerify(catalogJson);
-    Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
-    await File.WriteAllTextAsync(outputPath, catalogJson + Environment.NewLine, new System.Text.UTF8Encoding(false));
+    Directory.CreateDirectory(Path.GetDirectoryName(catalogOutputPath)!);
+    await File.WriteAllTextAsync(catalogOutputPath, catalogJson + Environment.NewLine, new System.Text.UTF8Encoding(false));
     return 0;
 }
 
