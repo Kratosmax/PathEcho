@@ -927,6 +927,9 @@ async Task TestUpdateHandoffContractAsync()
 
     var app = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "App.xaml.cs"));
     True(app.Contains("SignalUpdateReady(e.Args)", StringComparison.Ordinal), "新版完成初始化后没有报告就绪。");
+    True(app.Contains("AppLogger.Critical(\"Unable to read update result.\"", StringComparison.Ordinal), "更新结果损坏时可能在 Debug 关闭状态下静默失败。");
+    True(app.Contains("PathEcho 更新结果不可用", StringComparison.Ordinal), "更新结果损坏时没有可见反馈。");
+    True(app.Contains("Unable to delete consumed update result.", StringComparison.Ordinal), "结果清理失败与结果解析失败没有分离处理。");
 
     var updateWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "UpdateWindow.xaml.cs"));
     True(updateWindow.Contains("_handoffStarted = true", StringComparison.Ordinal), "外部更新器启动后更新窗口没有锁定取消操作。");

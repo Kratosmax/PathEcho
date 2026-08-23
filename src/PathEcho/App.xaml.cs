@@ -112,29 +112,47 @@ public partial class App : System.Windows.Application
 
     private void ShowUpdateResult(string[] arguments)
     {
-        var path = GetUpdateStatePath(arguments, "--update-result");
-        if (path is null)
-        {
-            return;
-        }
-
+        string? path = null;
+        bool succeeded;
+        string message;
         try
         {
+            path = GetUpdateStatePath(arguments, "--update-result");
+            if (path is null)
+            {
+                return;
+            }
+
             using var document = JsonDocument.Parse(File.ReadAllText(path));
             var root = document.RootElement;
-            var succeeded = string.Equals(root.GetProperty("Status").GetString(), "succeeded", StringComparison.Ordinal);
-            var message = root.GetProperty("Message").GetString() ?? "更新流程已结束。";
-            ShowMainWindow();
-            System.Windows.MessageBox.Show(
-                message,
-                succeeded ? "PathEcho 更新完成" : "PathEcho 更新失败",
-                MessageBoxButton.OK,
-                succeeded ? MessageBoxImage.Information : MessageBoxImage.Error);
-            File.Delete(path);
+            succeeded = string.Equals(root.GetProperty("Status").GetString(), "succeeded", StringComparison.Ordinal);
+            message = root.GetProperty("Message").GetString() ?? "更新流程已结束。";
         }
         catch (Exception exception)
         {
-            AppLogger.Error("Unable to read update result.", exception);
+            AppLogger.Critical("Unable to read update result.", exception);
+            ShowMainWindow();
+            System.Windows.MessageBox.Show(
+                "PathEcho 已重新启动，但无法读取更新结果详情。现有配置和备份未被删除，请查看日志或从 Release 页面手动覆盖安装。",
+                "PathEcho 更新结果不可用",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        ShowMainWindow();
+        System.Windows.MessageBox.Show(
+            message,
+            succeeded ? "PathEcho 更新完成" : "PathEcho 更新失败",
+            MessageBoxButton.OK,
+            succeeded ? MessageBoxImage.Information : MessageBoxImage.Error);
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AppLogger.Critical("Unable to delete consumed update result.", exception);
         }
     }
 
