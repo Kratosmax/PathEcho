@@ -89,14 +89,9 @@ public partial class MainWindow : Window
     private void OnNavigate(object sender, RoutedEventArgs e)
     {
         var selected = (sender as Button)?.Tag as string ?? "Sync";
-        if (_selectedView == "Settings" && selected != "Settings" && HasUnsavedSettings())
+        if (selected != "Settings" && !TryDiscardUnsavedSettings(this))
         {
-            if (!UnsavedChangesGuard.ConfirmDiscard(this))
-            {
-                return;
-            }
-
-            ReloadSettingsControls();
+            return;
         }
 
         SelectView(selected);
@@ -450,6 +445,28 @@ public partial class MainWindow : Window
         return !string.Equals(_settingsSnapshot, CaptureSettingsState(), StringComparison.Ordinal);
     }
 
+    internal bool TryDiscardUnsavedSettings(Window promptOwner)
+    {
+        if (_selectedView != "Settings" || !HasUnsavedSettings())
+        {
+            return true;
+        }
+
+        if (!IsVisible)
+        {
+            Show();
+            Activate();
+        }
+
+        if (!UnsavedChangesGuard.ConfirmDiscard(promptOwner))
+        {
+            return false;
+        }
+
+        ReloadSettingsControls();
+        return true;
+    }
+
     private string CaptureSettingsState() => string.Join('\u001f',
         StartupCheck.IsChecked,
         MinimizedCheck.IsChecked,
@@ -696,9 +713,11 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunUiActionAsync("正在保存同步任务", () => _runtime.UpdateSyncTaskAsync(dialog.Result));
-        StatusText.Text = $"{dialog.Result.Name} 已更新";
-        RefreshSyncFilter();
+        if (await RunUiActionAsync("正在保存同步任务", () => _runtime.UpdateSyncTaskAsync(dialog.Result)))
+        {
+            StatusText.Text = $"{dialog.Result.Name} 已更新";
+            RefreshSyncFilter();
+        }
     }
 
     private async void OnDuplicateSyncMenu(object sender, RoutedEventArgs e)
@@ -714,8 +733,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunUiActionAsync("正在创建任务副本", () => _runtime.AddSyncTaskAsync(dialog.Result));
-        StatusText.Text = $"{dialog.Result.Name} 已创建";
+        if (await RunUiActionAsync("正在创建任务副本", () => _runtime.AddSyncTaskAsync(dialog.Result)))
+        {
+            StatusText.Text = $"{dialog.Result.Name} 已创建";
+        }
     }
 
     private async void OnRunSyncMenu(object sender, RoutedEventArgs e)
@@ -792,8 +813,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunUiActionAsync("正在删除同步任务", () => _runtime.RemoveSyncTaskAsync(row.Definition.Id));
-        StatusText.Text = "同步任务已删除";
+        if (await RunUiActionAsync("正在删除同步任务", () => _runtime.RemoveSyncTaskAsync(row.Definition.Id)))
+        {
+            StatusText.Text = "同步任务已删除";
+        }
     }
 
     private static T? FindAncestor<T>(DependencyObject? current) where T : DependencyObject
@@ -827,23 +850,27 @@ public partial class MainWindow : Window
             return;
         }
 
-        await RunUiActionAsync("正在删除游戏", () => _runtime.RemoveGameProfileAsync(row.Definition.Id));
-        StatusText.Text = "游戏已删除，备份仍保留";
+        if (await RunUiActionAsync("正在删除游戏", () => _runtime.RemoveGameProfileAsync(row.Definition.Id)))
+        {
+            StatusText.Text = "游戏已删除，备份仍保留";
+        }
     }
 
-    private async Task RunUiActionAsync(string status, Func<Task> action)
+    private async Task<bool> RunUiActionAsync(string status, Func<Task> action)
     {
         StatusText.Text = status;
         IsEnabled = false;
         try
         {
             await action();
+            return true;
         }
         catch (Exception exception)
         {
             StatusText.Text = "操作失败";
             AppLogger.Error(status, exception);
             ShowError(exception.Message);
+            return false;
         }
         finally
         {

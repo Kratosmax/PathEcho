@@ -67,7 +67,10 @@ try
 catch (Exception exception)
 {
     TryWriteResult(resultPath, "failed", exception.Message);
-    if (installValidated && parentExited && target is not null)
+    if (installValidated &&
+        parentExited &&
+        target is not null &&
+        exception is not UpdateRollbackException)
     {
         TryRestartAfterFailure(target, resultPath);
     }
@@ -192,16 +195,38 @@ static async Task ApplyPackageAsync(string package, string target, string versio
         TryDeleteFile(readyPath);
         TryDeleteTree(backup);
     }
-    catch
+    catch (Exception updateFailure)
     {
+        Exception? rollbackFailure = null;
         if (newTargetPlaced && Directory.Exists(target))
         {
-            Directory.Move(target, failed);
+            try
+            {
+                Directory.Move(target, failed);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                rollbackFailure = exception;
+            }
         }
 
         if (targetMoved && Directory.Exists(backup) && !Directory.Exists(target))
         {
-            Directory.Move(backup, target);
+            try
+            {
+                Directory.Move(backup, target);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                rollbackFailure = rollbackFailure is null
+                    ? exception
+                    : new AggregateException(rollbackFailure, exception);
+            }
+        }
+
+        if (rollbackFailure is not null)
+        {
+            throw new UpdateRollbackException(updateFailure, rollbackFailure);
         }
 
         throw;
@@ -365,3 +390,9 @@ static void TryDeleteTree(string path)
     {
     }
 }
+
+sealed class UpdateRollbackException(Exception updateFailure, Exception rollbackFailure)
+    : AggregateException(
+        "更新失败，且自动回滚未完整完成。已保留恢复现场并停止自动重启，请手动安装最新版本。",
+        updateFailure,
+        rollbackFailure);

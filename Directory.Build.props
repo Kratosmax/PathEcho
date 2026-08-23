@@ -1,7 +1,7 @@
 <Project>
   <PropertyGroup>
     <ArtifactProjectName>$([System.Text.RegularExpressions.Regex]::Replace('$(MSBuildProjectName)', '_[^_]+_wpftmp$', ''))</ArtifactProjectName>
-    <Version>0.2.5</Version>
+    <Version>0.2.6</Version>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

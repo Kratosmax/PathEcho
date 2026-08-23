@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.ComponentModel;
 using System.Windows;
 using PathEcho.Core.Update;
 using PathEcho.Services;
@@ -11,6 +12,7 @@ public partial class UpdateWindow : Window
     private readonly bool _startImmediately;
     private UpdateCheckResult? _result;
     private CancellationTokenSource? _cancellation;
+    private bool _handoffStarted;
 
     public UpdateWindow(Window owner, UpdateNetworkOptions options, bool startImmediately = true)
     {
@@ -19,6 +21,7 @@ public partial class UpdateWindow : Window
         _startImmediately = startImmediately;
         InitializeComponent();
         WindowBackdrop.Attach(this);
+        Closing += OnClosing;
         Closed += (_, _) =>
         {
             _cancellation?.Cancel();
@@ -55,6 +58,11 @@ public partial class UpdateWindow : Window
 
     private void OnSecondary(object sender, RoutedEventArgs e)
     {
+        if (_handoffStarted)
+        {
+            return;
+        }
+
         _cancellation?.Cancel();
         Close();
     }
@@ -105,6 +113,12 @@ public partial class UpdateWindow : Window
 
     private async Task DownloadAndInstallAsync(UpdateManifest manifest)
     {
+        if (Owner is MainWindow mainWindow && !mainWindow.TryDiscardUnsavedSettings(this))
+        {
+            StatusText.Text = "更新已暂缓，未保存设置仍保留";
+            return;
+        }
+
         SetBusy("正在连接更新线路…");
         DownloadProgress.Visibility = Visibility.Visible;
         DownloadProgress.IsIndeterminate = false;
@@ -116,17 +130,27 @@ public partial class UpdateWindow : Window
         });
         try
         {
-            await _updateService.DownloadAndLaunchAsync(manifest, progress, BeginOperation());
+            await _updateService.DownloadAndLaunchAsync(
+                manifest,
+                progress,
+                BeginOperation(),
+                () => Dispatcher.Invoke(() =>
+                {
+                    _handoffStarted = true;
+                    StatusText.Text = "正在启动外部更新器，此阶段不能取消…";
+                    SecondaryButton.IsEnabled = false;
+                }));
             DownloadProgress.Value = 100;
             StatusText.Text = "验证完成，正在交给外部更新器…";
             PrimaryButton.Content = "正在退出";
             if (System.Windows.Application.Current is App app)
             {
-                app.ExitApplication();
+                app.ExitApplication(discardUnsavedSettings: true);
             }
         }
         catch (OperationCanceledException)
         {
+            _handoffStarted = false;
             StatusText.Text = "下载已取消，现有安装未修改";
             PrimaryButton.Content = "重试";
             PrimaryButton.IsEnabled = true;
@@ -134,6 +158,7 @@ public partial class UpdateWindow : Window
         }
         catch (Exception exception)
         {
+            _handoffStarted = false;
             NotesText.Text = exception.Message;
             StatusText.Text = "下载或验证失败，现有安装未修改";
             PrimaryButton.Content = "重试";
@@ -156,5 +181,13 @@ public partial class UpdateWindow : Window
         _cancellation?.Dispose();
         _cancellation = new CancellationTokenSource();
         return _cancellation.Token;
+    }
+
+    private void OnClosing(object? sender, CancelEventArgs e)
+    {
+        if (_handoffStarted && System.Windows.Application.Current is App { IsExiting: false })
+        {
+            e.Cancel = true;
+        }
     }
 }

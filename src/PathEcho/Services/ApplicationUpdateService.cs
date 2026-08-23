@@ -65,7 +65,8 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
     public async Task DownloadAndLaunchAsync(
         UpdateManifest manifest,
         IProgress<UpdateDownloadProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Action? handoffStarting = null)
     {
         var channel = ReadChannel() ?? throw new InvalidOperationException("当前目录不是可就地更新的 PathEcho 安装。");
         if (!string.Equals(channel, manifest.Channel, StringComparison.Ordinal))
@@ -117,8 +118,10 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
             start.ArgumentList.Add(argument);
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        handoffStarting?.Invoke();
         using var updaterProcess = Process.Start(start) ?? throw new InvalidOperationException("无法启动外部更新器。");
-        await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken).ConfigureAwait(false);
+        await Task.Delay(TimeSpan.FromMilliseconds(750)).ConfigureAwait(false);
         if (updaterProcess.HasExited)
         {
             var detail = TryReadUpdateFailure(resultPath);

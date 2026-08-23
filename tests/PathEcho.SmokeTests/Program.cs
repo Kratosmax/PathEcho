@@ -31,6 +31,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("只读表格不会进入编辑模式", TestReadOnlyDataGridContractAsync),
     ("设置保存会提交线路表格编辑", TestSettingsGridCommitContractAsync),
     ("未保存编辑在关闭或离开页面前会确认", TestUnsavedChangesContractAsync),
+    ("失败的界面操作不会覆盖成成功状态", TestUiActionResultContractAsync),
     ("重复启动会激活主实例且不会错误释放锁", TestSingleInstanceCoordinatorAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
@@ -366,7 +367,40 @@ Task TestUnsavedChangesContractAsync()
 
     var mainWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml.cs"));
     True(mainWindow.Contains("HasUnsavedSettings()", StringComparison.Ordinal), "设置页离开时没有检查未保存内容。");
-    True(mainWindow.Contains("UnsavedChangesGuard.ConfirmDiscard(this)", StringComparison.Ordinal), "设置页没有复用未保存确认逻辑。");
+    True(mainWindow.Contains("UnsavedChangesGuard.ConfirmDiscard(promptOwner)", StringComparison.Ordinal), "设置页没有复用未保存确认逻辑。");
+    True(mainWindow.Contains("internal bool TryDiscardUnsavedSettings(Window promptOwner)", StringComparison.Ordinal), "设置页未保存门禁没有形成统一入口。");
+
+    var app = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "App.xaml.cs"));
+    True(app.Contains("!_mainWindow.TryDiscardUnsavedSettings(_mainWindow)", StringComparison.Ordinal), "应用退出会绕过未保存设置提醒。");
+    True(app.Contains("ExitApplication(discardUnsavedSettings: true)", StringComparison.Ordinal), "致命异常退出仍可能被未保存提醒阻断。");
+
+    var updateWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "UpdateWindow.xaml.cs"));
+    True(updateWindow.Contains("!mainWindow.TryDiscardUnsavedSettings(this)", StringComparison.Ordinal), "自动更新退出会绕过未保存设置提醒。");
+    True(updateWindow.Contains("app.ExitApplication(discardUnsavedSettings: true)", StringComparison.Ordinal), "更新交接完成后可能重复提示并阻断退出。");
+    return Task.CompletedTask;
+}
+
+Task TestUiActionResultContractAsync()
+{
+    var source = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml.cs"));
+    True(source.Contains("private async Task<bool> RunUiActionAsync", StringComparison.Ordinal), "界面操作包装器没有向调用方返回成功状态。");
+    var handlerIndex = source.IndexOf("private async Task<bool> RunUiActionAsync", StringComparison.Ordinal);
+    True(source.IndexOf("return false;", handlerIndex, StringComparison.Ordinal) >= 0, "界面操作失败后没有返回失败状态。");
+
+    foreach (var (operation, status) in new[]
+    {
+        ("正在保存同步任务", "已更新"),
+        ("正在创建任务副本", "已创建"),
+        ("正在删除同步任务", "同步任务已删除"),
+        ("正在删除游戏", "游戏已删除"),
+    })
+    {
+        var operationIndex = source.IndexOf(operation, StringComparison.Ordinal);
+        var statusIndex = source.IndexOf(status, operationIndex, StringComparison.Ordinal);
+        var guardIndex = source.LastIndexOf("if (await RunUiActionAsync", statusIndex, StringComparison.Ordinal);
+        True(operationIndex >= 0 && statusIndex >= 0 && guardIndex <= operationIndex && operationIndex - guardIndex < 100, $"{status} 仍可能在操作失败后显示。");
+    }
+
     return Task.CompletedTask;
 }
 
@@ -871,13 +905,21 @@ async Task TestUpdateHandoffContractAsync()
     var service = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Services", "ApplicationUpdateService.cs"));
     True(service.Contains("StartsWith(\"PathEcho.Core\"", StringComparison.Ordinal), "更新 launcher 没有复制更新器依赖。");
     True(service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750)", StringComparison.Ordinal), "主程序退出前没有等待更新器启动握手。");
+    True(!service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken)", StringComparison.Ordinal), "更新器启动后的握手仍可被 UI 取消并遗留等待进程。");
+    True(service.Contains("cancellationToken.ThrowIfCancellationRequested();", StringComparison.Ordinal), "启动外部更新器前没有最后检查取消请求。");
+    True(service.Contains("handoffStarting?.Invoke();", StringComparison.Ordinal), "更新窗口无法进入不可取消的交接状态。");
     True(service.Contains("updaterProcess.HasExited", StringComparison.Ordinal), "主程序没有识别更新器立即退出。");
     True(service.Contains("\"--result\", resultPath", StringComparison.Ordinal), "主程序没有向更新器传递结果文件。");
 
     var updater = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho.Updater", "Program.cs"));
     True(updater.Contains("TryWriteResult(resultPath, \"failed\"", StringComparison.Ordinal), "更新器失败时没有持久化结果。");
-    True(updater.Contains("installValidated && parentExited", StringComparison.Ordinal), "更新器可能在父进程仍运行时错误重启第二实例。");
+    True(
+        updater.Contains("installValidated &&", StringComparison.Ordinal) &&
+        updater.Contains("parentExited &&", StringComparison.Ordinal),
+        "更新器可能在父进程仍运行时错误重启第二实例。");
     True(updater.Contains("TryRestartAfterFailure", StringComparison.Ordinal), "父进程退出后的更新失败没有恢复可见界面。");
+    True(updater.Contains("exception is not UpdateRollbackException", StringComparison.Ordinal), "回滚不完整时仍可能自动启动不可信目标目录。");
+    True(updater.Contains("throw new UpdateRollbackException(updateFailure, rollbackFailure)", StringComparison.Ordinal), "更新器没有区分普通更新失败与回滚不完整。");
     True(updater.Contains("await WaitForReadyAsync(updatedProcess, readyPath)", StringComparison.Ordinal), "更新器没有等待新版报告就绪。");
     var readyWait = updater.IndexOf("await WaitForReadyAsync(updatedProcess, readyPath)", StringComparison.Ordinal);
     var backupCleanup = updater.IndexOf("TryDeleteTree(backup)", readyWait, StringComparison.Ordinal);
@@ -885,6 +927,10 @@ async Task TestUpdateHandoffContractAsync()
 
     var app = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "App.xaml.cs"));
     True(app.Contains("SignalUpdateReady(e.Args)", StringComparison.Ordinal), "新版完成初始化后没有报告就绪。");
+
+    var updateWindow = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "UpdateWindow.xaml.cs"));
+    True(updateWindow.Contains("_handoffStarted = true", StringComparison.Ordinal), "外部更新器启动后更新窗口没有锁定取消操作。");
+    True(updateWindow.Contains("e.Cancel = true", StringComparison.Ordinal), "更新交接期间仍可关闭窗口并中断生命周期。");
 
     var package = Path.Combine(testRoot, "handoff-package.zip");
     var resultPath = Path.Combine(testRoot, "update-result.json");

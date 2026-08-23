@@ -189,9 +189,16 @@ public partial class App : System.Windows.Application
         ShowMainWindow();
     }
 
-    public async void ExitApplication()
+    public async void ExitApplication(bool discardUnsavedSettings = false)
     {
         if (_isExiting)
+        {
+            return;
+        }
+
+        if (!discardUnsavedSettings &&
+            _mainWindow is not null &&
+            !_mainWindow.TryDiscardUnsavedSettings(_mainWindow))
         {
             return;
         }
@@ -223,7 +230,7 @@ public partial class App : System.Windows.Application
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("打开 PathEcho", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
         menu.Items.Add(new Forms.ToolStripSeparator());
-        menu.Items.Add("退出", null, (_, _) => Dispatcher.Invoke(ExitApplication));
+        menu.Items.Add("退出", null, (_, _) => Dispatcher.Invoke(() => ExitApplication()));
         _trayIcon = new Forms.NotifyIcon
         {
             Text = "PathEcho",
@@ -266,7 +273,7 @@ public partial class App : System.Windows.Application
             await stream.FlushAsync();
         }
 
-        ExitApplication();
+        ExitApplication(discardUnsavedSettings: true);
     }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
@@ -278,7 +285,7 @@ public partial class App : System.Windows.Application
             "PathEcho",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
-        ExitApplication();
+        ExitApplication(discardUnsavedSettings: true);
     }
 
     private void OnExit(object sender, ExitEventArgs e)

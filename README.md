@@ -1,6 +1,6 @@
 # PathEcho
 
-当前发布版本：`0.2.5`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
+当前发布版本：`0.2.6`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
 
 <img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
 
@@ -12,10 +12,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.2.5-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.2.5-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.2.5-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.2.5-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.2.6-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.2.6-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.2.6-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.2.6-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 
@@ -37,6 +37,8 @@ Windows 11 build 22621 及以上会尝试全客户区 Acrylic 系统材质；DWM
 ### 自动更新
 
 PathEcho 启动后可后台检查更新，也可在设置页手动检查。客户端先用内置 ECDSA P-256 公钥验证清单签名，再校验版本、通道、下载大小、SHA-256 和包结构；外部更新器会再次验签和验包，并用同卷暂存、备份、替换和失败回滚完成安装。Full 与 Lite 不跨通道更新，安装版更新时保留卸载器。
+
+更新器启动前仍可取消；进入外部替换交接后窗口会锁定取消操作，避免留下等待主进程的半完成事务。新版只有在完成初始化并报告就绪后才会删除旧版备份；若回滚本身受文件占用或权限变化阻断，会保留恢复现场并停止自动重启，不会把未确认的新目录当成旧版启动。`v0.2.4` 若曾出现下载后退出且无后续，请先从 Release 页面手动覆盖升级到当前版本一次。
 
 更新和远程游戏规则共用直连、多条 GitHub URL 前缀线路及独立 HTTP 出网代理。线路按 0 到 10 的优先级从高到低尝试，0 表示禁用；直连线路不可删除但可禁用。前缀线路会看到完整 GitHub 请求地址；无论使用哪条线路，真实性、结构、大小和重定向检查都不会被跳过。
 
