@@ -106,6 +106,7 @@ public sealed class ApplicationUpdateService(UpdateNetworkOptions networkOptions
         {
             UseShellExecute = false,
             CreateNoWindow = true,
+            WorkingDirectory = launcher,
         };
         foreach (var argument in new[]
         {

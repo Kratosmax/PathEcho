@@ -39,6 +39,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("重复启动会激活主实例且不会错误释放锁", TestSingleInstanceCoordinatorAsync),
     ("更新事务锁可跨线程安全交接且阻止并发更新", TestUpdateTransactionGateAsync),
     ("更新文件操作可等待短暂占用并报告长期占用路径", TestUpdateFileOperationAsync),
+    ("更新器离开安装目录后可移动整个目录", TestUpdaterWorkingDirectoryAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
@@ -603,6 +604,40 @@ async Task TestUpdateFileOperationAsync()
     }
 }
 
+Task TestUpdaterWorkingDirectoryAsync()
+{
+    var root = Path.Combine(testRoot, "updater-working-directory");
+    var target = Path.Combine(root, "install");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(target);
+    var originalDirectory = Environment.CurrentDirectory;
+    try
+    {
+        Environment.CurrentDirectory = target;
+        var blocked = false;
+        try
+        {
+            Directory.Move(target, backup);
+        }
+        catch (IOException)
+        {
+            blocked = true;
+        }
+
+        True(blocked, "Windows 未复现当前工作目录阻止安装目录移动的前置条件。");
+        Environment.CurrentDirectory = repositoryRoot;
+        Directory.Move(target, backup);
+        True(Directory.Exists(backup), "更新器离开安装目录后仍无法移动安装目录。");
+    }
+    finally
+    {
+        Environment.CurrentDirectory = originalDirectory;
+        DeleteTree(root);
+    }
+
+    return Task.CompletedTask;
+}
+
 async Task TestSyncFiltersAndPreviewAsync()
 {
     var root = Path.Combine(testRoot, "sync-filter-preview");
@@ -1088,6 +1123,7 @@ async Task TestUpdateHandoffContractAsync()
     var service = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Services", "ApplicationUpdateService.cs"));
     True(service.Contains("StartsWith(\"PathEcho.Core\"", StringComparison.Ordinal), "更新 launcher 没有复制更新器依赖。");
     True(service.Contains("UpdateFileOperation.RetryAsync(", StringComparison.Ordinal), "更新 launcher 没有处理短暂文件占用。");
+    True(service.Contains("WorkingDirectory = launcher", StringComparison.Ordinal), "外部更新器仍可能继承安装目录作为当前工作目录。");
     True(service.Contains("TryDeleteTree(launcher)", StringComparison.Ordinal), "更新 launcher 复制失败会留下半成品目录。");
     True(service.Contains("CleanupStaleUpdateCache();", StringComparison.Ordinal), "启动检查不会清理过期更新缓存。");
     False(service.Contains("Task.Delay(TimeSpan.FromMilliseconds(750)", StringComparison.Ordinal), "主程序仍使用固定延时伪装更新器握手。");
@@ -1102,6 +1138,7 @@ async Task TestUpdateHandoffContractAsync()
     True(updater.Contains("TryWriteResult(resultPath, \"failed\"", StringComparison.Ordinal), "更新器失败时没有持久化结果。");
     True(updater.Contains("TryWriteFailureLog(exception)", StringComparison.Ordinal), "更新失败在结果消费后没有保留诊断日志。");
     True(updater.Contains("UpdateFileOperation.RetryAsync(\"备份当前安装目录\"", StringComparison.Ordinal), "安装目录替换没有处理短暂文件占用。");
+    True(updater.Contains("Directory.SetCurrentDirectory(AppContext.BaseDirectory)", StringComparison.Ordinal), "更新器没有主动离开待移动的安装目录。");
     True(updater.Contains("UpdateTransactionGate.UpdaterMutexName", StringComparison.Ordinal), "并发更新器之间没有互斥。");
     var handoffSignal = updater.IndexOf("WriteStateSignal(handoffReadyPath", StringComparison.Ordinal);
     var parentWait = updater.IndexOf("await WaitForVerifiedProcessExitAsync", StringComparison.Ordinal);

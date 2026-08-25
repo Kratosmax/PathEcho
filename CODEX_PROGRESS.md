@@ -18,8 +18,8 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-26，Asia/Shanghai。
-- 版本：`0.3.0` 候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；上一正式版本为 `0.2.7`，历史正式标签保持固定，不移动已发布标签。
+- 版本：`0.3.1` 候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 分支：`main`；当前正式版本为 `0.3.0`，`0.3.1` 待发布，历史正式标签保持固定，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
@@ -30,6 +30,7 @@ dotnet --version
 - `v0.2.5` 已正式发布：标签指向 `c1c1482e747a4cc8eb43629557850e54e7dda87a`，GitHub Actions Run `32626115826` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.2.5`。
 - `v0.2.6` 已正式发布：标签指向 `d421f7cefb616b696740135117b9321f3ef81400`，GitHub Actions Run `32627247501` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.2.6`；8 个资产、7 条 SHA-256、Lite/Full 签名和 latest 路由均已核验。
 - `v0.2.7` 已正式发布：标签指向 `aa7d096362a41acbb962286113caade897975853`，GitHub Actions Run `32629134027` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.2.7`；8 个资产、7 条 SHA-256、Lite/Full 签名和 latest 路由均已核验。
+- `v0.3.0` 已正式发布：标签指向 `2f57bf220217ddf286dfc667ff4aaa8de4012494`，GitHub Actions Run `32874494465` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.3.0`；8 个资产均为 uploaded，latest 已指向该版本，三份签名清单的版本、通道、ZIP URL、大小和 SHA-256 与 Release 资产一致。按用户要求未下载 Full/Lite 包，也未执行真实旧版升级链。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
@@ -65,8 +66,8 @@ dotnet --version
 
 ## 当前待办
 
-- 本地 `main` 保留上一轮尚未推送的自动更新提交，并叠加本轮待发布改动；用户已授权提交、推送、打标签和创建 `v0.3.0` Release。
-- `v0.2.7` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.0` 一次；旧客户端无法通过新包修复自身尚未启动的新更新器代码。
+- `v0.3.0` 已发布；用户随后用预览版和安装版复现自动更新时安装目录被占用。本地已修复并升为 `0.3.1`，待提交、推送、打标签和发布。
+- `v0.3.0` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.1` 一次；旧客户端无法通过新包修复自身正在执行的旧更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
 
 ## 关键入口
@@ -88,11 +89,15 @@ dotnet --version
 2026-08-26 本地候选实际通过：
 
 - `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误。
-- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：31/31 通过；新增覆盖首次失败后完整暂存、源读取失败重试、写入十次询问、继续后成功、停止后保留完整副本、取消不等待完整 5 秒、成功清理 temp、清理旧版本失败不重复建快照，以及历史筛选/双击编辑契约。
+- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：32/32 通过；新增覆盖首次失败后完整暂存、源读取失败重试、写入十次询问、继续后成功、停止后保留完整副本、取消不等待完整 5 秒、成功清理 temp、清理旧版本失败不重复建快照、历史筛选/双击编辑契约，以及更新器离开安装目录后可移动整个目录。
 - `dotnet format PathEcho.sln --no-restore --verify-no-changes` 与 `git diff --check` 通过。
-- 本地 Lite 预览包 `temp/preview-0.3.0/PathEcho-0.3.0-Lite.zip`：548466 字节，SHA-256 `C3DC3A044992F4642D75BA4C5B8D4B826CCE6586AABBA636AF4217E6D10E483D`；包内版本、Lite 通道、程序集主版本和必需结构已核验，仅用于本地验收，不是 Release。
+- 本地 Lite 预览包 `temp/preview-0.3.1/PathEcho-0.3.1-Lite.zip`：548550 字节，SHA-256 `D0CD268522BC30A4B23F92A0ABB2A87E33074337DBE619A189A4FF950D62AABD`；包内版本、Lite 通道和必需结构由发布脚本生成，仅用于本地验收，不是 Release。
 - 真实 WPF 920×620 截图 `temp/ui-check/game-edit-entry-fixed-920x620.png` 与 `temp/ui-check/backup-history-filter-920x620.png` 已核验：游戏编辑入口启用，备份操作列可见，历史搜索/游戏筛选/打开/回档均无重叠、截断或横向滚动。
 - Windows 应用控制辅助工具两次初始化均因自身 `failed to write kernel assets: 系统找不到指定的路径` 失败，因此未完成自动化双击动作；事件绑定、编辑构造器字段回填和 ID 保留由编译与静态契约测试覆盖，视觉由真实 WPF 主窗截图覆盖。
+
+2026-08-26 `v0.3.0` 发布后轻量核验：Actions Run `32874494465` 在 2 分 49 秒内完成且结论为 success；Release 非草稿、非预发布，8 个预期资产均为 uploaded，GitHub latest API 指向 `v0.3.0`。`update.json`、`update-lite.json` 和 `update-full.json` 可下载，版本均为 `0.3.0` 且带签名；兼容清单指向 Lite，Lite/Full 的下载 URL、大小与 SHA-256 均匹配对应 ZIP 资产。按用户要求未下载正式安装包或 ZIP，未执行真实旧版升级链。
+
+2026-08-26 `0.3.1` 根因修复：外置更新器此前未设置 `WorkingDirectory`，会继承 PathEcho 安装目录并使 Windows 拒绝 `Directory.Move(target, backup)`。隔离复现得到与用户截图一致的 `The process cannot access the file because it is being used by another process.`；将当前目录切到外部目录后同一移动立即成功。主程序现显式把 launcher 设为工作目录，更新器自身也切到 `AppContext.BaseDirectory`。Release 构建 0 警告、0 错误，32/32 测试通过。`v0.3.0` 及更早版本执行的是各自旧更新器，无法通过新包修复正在运行的旧代码，必须手动覆盖安装 `0.3.1` 一次。
 
 2026-08-23 本地功能分支实际通过：
 
@@ -180,7 +185,7 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前候选版本：`0.3.0`；上一正式版本为 `0.2.7`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+> 当前候选版本：`0.3.1`；上一正式版本为 `0.3.0`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
 
 `0.2.8` 本地候选验证：更新交接改用落盘握手，更新器全程持有独占锁，普通启动只瞬时探测更新事务以保留原有单实例唤醒；安装目录移动、回滚、卸载器保留和 launcher 复制使用有限文件占用重试并报告阶段/路径，失败写入独立轮转日志，半成品与过期缓存可清理。Release 与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 27/27、`dotnet format --verify-no-changes` 与 `git diff --check` 通过。Lite 预览包 `temp/preview-0.2.8-final/PathEcho-0.2.8-Lite.zip` 为 527726 字节，SHA-256 `19FDB471A8D585F1291F9BCE1DF347032A9ACDBE86A38D7B63DE21626F2D6883`；包内新更新器与 `v0.2.7` 原始更新器的版本/通道/哈希/结构预检均返回 0。1180×760 真实 WPF 截图位于 `temp/preview-0.2.8-final/main-window.png`，进程退出码 0。最终更新器在隔离安装副本中面对 1.2 秒独占文件仍完成替换、ready 和备份清理，退出码 0、事务残留 0。正式四包、签名清单、上一正式版到正式候选的签名升级链和线上资产尚待标签工作流与发布后验证。
 

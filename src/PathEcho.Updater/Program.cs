@@ -26,6 +26,7 @@ try
 
         target = RequirePath(options, "target");
         EnsureLauncherIsExternal(target);
+        Directory.SetCurrentDirectory(AppContext.BaseDirectory);
         ValidateInstallRoot(target);
         installValidated = true;
     }
