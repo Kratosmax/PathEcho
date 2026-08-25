@@ -161,22 +161,24 @@
                             <TextBlock Text="游戏存档" FontSize="26" FontWeight="SemiBold"/>
                         </StackPanel>
                         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button x:Name="EditGameButton" Content="编辑" Click="OnEditGame" IsEnabled="False" Margin="0,0,8,0"/>
                             <Button x:Name="DeleteGameButton" Content="删除选中" Style="{StaticResource DangerButton}" Click="OnDeleteGame" IsEnabled="False" Margin="0,0,8,0"/>
                             <Button Content="智能识别" Click="OnDiscoverGames" Margin="0,0,8,0"/>
                             <Button Content="+  添加游戏" Style="{StaticResource PrimaryButton}" Click="OnAddGame"/>
                         </StackPanel>
                     </Grid>
                     <Grid Grid.Row="2">
-                        <DataGrid x:Name="GameGrid" ItemsSource="{Binding GameProfiles}" SelectionChanged="OnGameSelectionChanged" FrozenColumnCount="1">
+                        <DataGrid x:Name="GameGrid" ItemsSource="{Binding GameProfiles}" SelectionChanged="OnGameSelectionChanged"
+                                  MouseDoubleClick="OnGameRowDoubleClick" FrozenColumnCount="1">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="游戏" Binding="{Binding Name}" Width="1.2*" MinWidth="130" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="存档目录" Binding="{Binding SaveDirectory}" Width="2.4*" MinWidth="220" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="触发方式" Binding="{Binding Triggers}" Width="1.4*" MinWidth="150" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="版本" Binding="{Binding RetainedVersions}" Width="70" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="1.2*" MinWidth="120" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTemplateColumn Header="" Width="88">
+                                <DataGridTextColumn Header="游戏" Binding="{Binding Name}" Width="0.9*" MinWidth="80" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="存档目录" Binding="{Binding SaveDirectory}" Width="1.7*" MinWidth="140" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="触发方式" Binding="{Binding Triggers}" Width="1.05*" MinWidth="100" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="版本" Binding="{Binding RetainedVersions}" Width="50" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="状态" Binding="{Binding Status}" Width="0.85*" MinWidth="80" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTemplateColumn Header="" Width="68">
                                     <DataGridTemplateColumn.CellTemplate>
-                                        <DataTemplate><Button Content="立即备份" Padding="8,0" MinHeight="30" Click="OnBackupRow"/></DataTemplate>
+                                        <DataTemplate><Button Content="备份" Padding="7,0" MinHeight="30" Click="OnBackupRow"/></DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>
                                 </DataGridTemplateColumn>
                             </DataGrid.Columns>
@@ -205,14 +207,32 @@
                     <TabControl x:Name="HistoryTabs" Grid.Row="2">
                     <TabItem Header="存档版本">
                     <Grid>
-                        <DataGrid x:Name="HistoryGrid" ItemsSource="{Binding History}" FrozenColumnCount="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="12"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="12"/>
+                                <ColumnDefinition Width="190"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid>
+                                <TextBox x:Name="HistorySearchBox" Padding="34,7,10,7" TextChanged="OnHistoryFilterChanged" ToolTip="搜索游戏、触发方式、时间或快照目录"/>
+                                <TextBlock Text="⌕" FontSize="20" Foreground="{StaticResource MutedBrush}" Margin="11,0,0,1" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                                <TextBlock x:Name="HistorySearchHint" Text="搜索存档版本" Foreground="#87948F" Margin="34,0,0,0" VerticalAlignment="Center" IsHitTestVisible="False"/>
+                            </Grid>
+                            <ComboBox x:Name="HistoryGameFilter" Grid.Column="2" DisplayMemberPath="Name" SelectionChanged="OnHistoryFilterChanged" ToolTip="按游戏筛选"/>
+                        </Grid>
+                        <DataGrid x:Name="HistoryGrid" Grid.Row="2" FrozenColumnCount="1">
                             <DataGrid.Columns>
-                                <DataGridTextColumn Header="游戏" Binding="{Binding GameName}" Width="1.2*" MinWidth="130" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="备份时间" Binding="{Binding CreatedAt}" Width="155" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="触发方式" Binding="{Binding Trigger}" Width="120" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="文件数" Binding="{Binding FileCount}" Width="75" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTextColumn Header="快照目录" Binding="{Binding SnapshotDirectory}" Width="2.2*" MinWidth="220" ElementStyle="{StaticResource GridTextStyle}"/>
-                                <DataGridTemplateColumn Header="" Width="138">
+                                <DataGridTextColumn Header="游戏" Binding="{Binding GameName}" Width="0.9*" MinWidth="88" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="备份时间" Binding="{Binding CreatedAt}" Width="136" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="触发方式" Binding="{Binding Trigger}" Width="88" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="文件数" Binding="{Binding FileCount}" Width="56" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="快照目录" Binding="{Binding SnapshotDirectory}" Width="1.7*" MinWidth="130" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTemplateColumn Header="" Width="116">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal">
@@ -224,9 +244,13 @@
                                 </DataGridTemplateColumn>
                             </DataGrid.Columns>
                         </DataGrid>
-                        <StackPanel x:Name="HistoryEmpty" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <StackPanel x:Name="HistoryEmpty" Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center">
                             <TextBlock Text="◷" FontSize="34" Foreground="#8AA098" HorizontalAlignment="Center"/>
                             <TextBlock Text="还没有备份版本" FontSize="17" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,4"/>
+                        </StackPanel>
+                        <StackPanel x:Name="HistoryNoResults" Grid.Row="2" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <TextBlock Text="未找到匹配的存档版本" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                            <Button Content="清除筛选" Click="OnClearHistoryFilter" Margin="0,14,0,0"/>
                         </StackPanel>
                     </Grid>
                     </TabItem>

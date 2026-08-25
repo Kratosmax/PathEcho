@@ -11,6 +11,7 @@ using PathEcho.Core.Restore;
 using PathEcho.Core.Storage;
 using PathEcho.Core.Sync;
 using PathEcho.Core.Update;
+using PathEcho.Dialogs;
 using PathEcho.Platform.Windows.Restore;
 using PathEcho.Platform.Windows.Startup;
 
@@ -31,6 +32,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     private readonly Dictionary<Guid, GameBackupService> _gameServices = new();
     private readonly SnapshotStore _snapshotStore = new();
     private readonly StartupRegistrationService _startup = new();
+    private readonly CancellationTokenSource _stopping = new();
+    private bool _disposed;
 
     public PathEchoRuntime(bool previewMode, bool previewSeed = false)
     {
@@ -92,6 +95,15 @@ public sealed class PathEchoRuntime : IAsyncDisposable
                         SaveDirectory = @"D:\Games\Example\Saves",
                         Triggers = BackupTrigger.ChangedFiles | BackupTrigger.ProcessExited,
                         ProcessExecutablePath = @"D:\Games\Example\Game.exe",
+                    },
+                    new GameBackupProfile
+                    {
+                        Name = "云端冒险",
+                        SaveDirectory = @"C:\Users\Player\OneDrive\Saved Games\Cloud Adventure",
+                        BackupDirectory = @"E:\Game Backups\Cloud Adventure",
+                        Triggers = BackupTrigger.Scheduled | BackupTrigger.ProcessExited,
+                        ProcessExecutablePath = @"D:\Games\Cloud Adventure\CloudAdventure.exe",
+                        RetainedVersions = 30,
                     },
                 },
             };
@@ -168,6 +180,95 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             await StartGameMonitorSafelyAsync(profile).ConfigureAwait(false);
         }
+    }
+
+    public async Task UpdateGameProfileAsync(GameBackupProfile profile, CancellationToken cancellationToken = default)
+    {
+        profile.Validate();
+        var previous = Configuration.GameProfiles.SingleOrDefault(item => item.Id == profile.Id)
+            ?? throw new InvalidOperationException("要编辑的游戏存档不存在。");
+        var oldBackupRoot = previous.ResolveBackupDirectory(Configuration.DefaultBackupDirectory);
+        var newBackupRoot = profile.ResolveBackupDirectory(Configuration.DefaultBackupDirectory);
+        var backupRootChanged = !string.Equals(oldBackupRoot, newBackupRoot, StringComparison.OrdinalIgnoreCase);
+        var manager = new BackupDirectoryManager();
+        var moved = false;
+
+        if (!_previewMode && backupRootChanged)
+        {
+            await manager.EnsureWritableAsync(newBackupRoot, cancellationToken).ConfigureAwait(false);
+        }
+
+        await StopGameMonitorAsync(profile.Id).ConfigureAwait(false);
+        _gameServices.Remove(profile.Id);
+        try
+        {
+            if (!_previewMode && backupRootChanged)
+            {
+                moved = await manager.MoveProfileAsync(
+                    profile.Id,
+                    oldBackupRoot,
+                    newBackupRoot,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            var updatedConfiguration = Configuration with
+            {
+                GameProfiles = Configuration.GameProfiles
+                    .Select(item => item.Id == profile.Id ? profile : item)
+                    .ToArray(),
+            };
+            await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
+            Configuration = updatedConfiguration;
+        }
+        catch (Exception updateException)
+        {
+            Exception? rollbackException = null;
+            if (moved)
+            {
+                try
+                {
+                    await manager.MoveProfileAsync(
+                        profile.Id,
+                        newBackupRoot,
+                        oldBackupRoot,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception exception)
+                {
+                    rollbackException = exception;
+                }
+            }
+
+            if (!_previewMode && previous.IsEnabled)
+            {
+                await StartGameMonitorSafelyAsync(previous).ConfigureAwait(false);
+            }
+
+            if (rollbackException is not null)
+            {
+                throw new AggregateException(
+                    "保存游戏配置失败，且备份目录未能完整回滚。",
+                    updateException,
+                    rollbackException);
+            }
+
+            throw;
+        }
+
+        await InvokeOnUiAsync(() =>
+        {
+            var index = GameProfiles.ToList().FindIndex(item => item.Definition.Id == profile.Id);
+            if (index >= 0)
+            {
+                GameProfiles[index] = new GameProfileRow(profile);
+            }
+        });
+        if (!_previewMode && profile.IsEnabled)
+        {
+            await StartGameMonitorSafelyAsync(profile).ConfigureAwait(false);
+        }
+
+        await RefreshHistorySafelyAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task UpdateSyncTaskAsync(SyncTaskDefinition task, CancellationToken cancellationToken = default)
@@ -435,7 +536,17 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     {
         if (_previewMode)
         {
-            await InvokeOnUiAsync(History.Clear);
+            await InvokeOnUiAsync(() =>
+            {
+                History.Clear();
+                if (_previewSeed)
+                {
+                    foreach (var row in CreatePreviewHistory())
+                    {
+                        History.Add(row);
+                    }
+                }
+            });
             return;
         }
 
@@ -484,6 +595,13 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+        _stopping.Cancel();
         foreach (var taskId in _syncMonitors.Keys.ToArray())
         {
             await StopSyncMonitorAsync(taskId).ConfigureAwait(false);
@@ -497,6 +615,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         _syncRunners.Clear();
         _syncEngines.Clear();
         _gameServices.Clear();
+        _stopping.Dispose();
     }
 
     private async Task StartSyncMonitorAsync(SyncTaskDefinition task, CancellationToken cancellationToken)
@@ -675,9 +794,54 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             return service;
         }
 
-        service = new GameBackupService(profile, Configuration.DefaultBackupDirectory, new SnapshotStore());
+        service = new GameBackupService(
+            profile,
+            Configuration.DefaultBackupDirectory,
+            new SnapshotStore(),
+            retryOptions: new BackupRetryOptions
+            {
+                ConfirmContinueAsync = ConfirmBackupRetryAsync,
+            },
+            lifetimeToken: _stopping.Token);
         _gameServices.Add(profile.Id, service);
         return service;
+    }
+
+    private static async Task<bool> ConfirmBackupRetryAsync(
+        BackupRetryPrompt retry,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var operation = retry.Stage switch
+        {
+            BackupRetryStage.ReadingSource => "读取源存档并创建临时副本",
+            BackupRetryStage.WritingBackup => "从临时副本写入正式备份",
+            _ => "清理超过保留数量的旧版本",
+        };
+        var staging = retry.StagingDirectory is null
+            ? string.Empty
+            : $"\n\n临时目录：\n{retry.StagingDirectory}";
+        var message = $"“{retry.GameName}”在{operation}时已连续失败 {retry.FailedAttempts} 次。\n\n" +
+            $"最近错误：{retry.LastError.Message}{staging}\n\n是否继续每 5 秒重试一次？";
+
+        return await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (System.Windows.Application.Current is not App { IsExiting: false } ||
+                System.Windows.Application.Current.MainWindow is not Window owner)
+            {
+                return false;
+            }
+
+            var prompt = new PromptWindow(
+                owner,
+                "备份仍未成功",
+                message,
+                "继续重试",
+                retry.Stage == BackupRetryStage.WritingBackup ? "停止并保留临时副本" : "停止重试");
+            prompt.ShowDialog();
+            return prompt.Choice == PromptChoice.Primary;
+        });
     }
 
     private async Task RefreshHistorySafelyAsync(CancellationToken cancellationToken = default)
@@ -811,6 +975,40 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     private static Task InvokeOnUiAsync(Action action) =>
         System.Windows.Application.Current.Dispatcher.InvokeAsync(action).Task;
+
+    private IReadOnlyList<HistoryRow> CreatePreviewHistory()
+    {
+        var triggers = new[] { "手动备份", "文件变动", "游戏退出", "定时备份" };
+        return Configuration.GameProfiles
+            .SelectMany((profile, profileIndex) => Enumerable.Range(0, profileIndex == 0 ? 6 : 4)
+                .Select(index =>
+                {
+                    var createdAt = DateTimeOffset.UtcNow.AddHours(-(profileIndex * 5 + index * 3));
+                    var manifest = new SnapshotManifest
+                    {
+                        ProfileId = profile.Id,
+                        CreatedAtUtc = createdAt,
+                        Trigger = triggers[(profileIndex + index) % triggers.Length],
+                        Files = Enumerable.Range(0, 3 + index)
+                            .Select(fileIndex => new SnapshotFileEntry
+                            {
+                                RelativePath = $"slot-{fileIndex + 1}.sav",
+                                Sha256 = new string('A', 64),
+                                Length = 4096 + fileIndex,
+                                LastWriteUtcTicks = createdAt.UtcTicks,
+                            })
+                            .ToArray(),
+                    };
+                    var directory = Path.Combine(
+                        profile.ResolveBackupDirectory(Configuration.DefaultBackupDirectory),
+                        profile.Id.ToString("N"),
+                        "snapshots",
+                        $"{createdAt:yyyyMMdd-HHmmss-fff}-preview");
+                    return new HistoryRow(profile, new SnapshotVersion(directory, manifest));
+                }))
+            .OrderByDescending(row => row.CreatedAtUtc)
+            .ToArray();
+    }
 
     private Task PersistConfigurationAsync(CancellationToken cancellationToken) =>
         PersistConfigurationAsync(Configuration, cancellationToken);

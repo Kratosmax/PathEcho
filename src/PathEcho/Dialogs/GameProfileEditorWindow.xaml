@@ -10,7 +10,7 @@
                 <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <TextBlock Text="添加游戏存档" FontSize="22" FontWeight="SemiBold"/>
+            <TextBlock x:Name="TitleText" Text="添加游戏存档" FontSize="22" FontWeight="SemiBold"/>
             <StackPanel Grid.Row="1" Margin="0,18,0,0">
                 <TextBlock Text="游戏名称" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
                 <TextBox x:Name="NameBox"/>
@@ -57,7 +57,7 @@
             </StackPanel>
             <StackPanel Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
                 <Button Content="取消" IsCancel="True" Margin="0,0,8,0"/>
-                <Button Content="添加" Style="{StaticResource PrimaryButton}" Click="OnCreate"/>
+                <Button x:Name="SubmitButton" Content="添加" Style="{StaticResource PrimaryButton}" Click="OnCreate"/>
             </StackPanel>
         </Grid>
     </ScrollViewer>

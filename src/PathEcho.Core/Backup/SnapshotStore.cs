@@ -4,7 +4,7 @@ using PathEcho.Core.Sync;
 
 namespace PathEcho.Core.Backup;
 
-public sealed class SnapshotStore
+public sealed class SnapshotStore : IBackupSnapshotStore
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -22,13 +22,13 @@ public sealed class SnapshotStore
     {
         var sourceRoot = NormalizeRoot(sourceDirectory);
         var backupRoot = NormalizeRoot(backupDirectory);
-        ValidateSeparateRoots(sourceRoot, backupRoot);
         if (!Directory.Exists(sourceRoot))
         {
             throw new DirectoryNotFoundException($"存档目录不存在：{sourceRoot}");
         }
 
         var profileRoot = Path.Combine(backupRoot, profileId.ToString("N"));
+        ValidateSeparateRoots(sourceRoot, profileRoot);
         var objectsRoot = Path.Combine(profileRoot, "objects");
         var snapshotsRoot = Path.Combine(profileRoot, "snapshots");
         Directory.CreateDirectory(objectsRoot);
@@ -127,7 +127,7 @@ public sealed class SnapshotStore
         }
         catch
         {
-            DeleteDirectoryIfPresent(pendingRoot);
+            DirectoryTree.DeleteIfPresent(pendingRoot);
             throw;
         }
 
@@ -166,7 +166,7 @@ public sealed class SnapshotStore
         foreach (var snapshot in snapshots.Skip(retainedVersions))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            DeleteDirectoryIfPresent(snapshot);
+            DirectoryTree.DeleteIfPresent(snapshot);
             removed++;
         }
 
@@ -293,18 +293,4 @@ public sealed class SnapshotStore
         return combined;
     }
 
-    private static void DeleteDirectoryIfPresent(string path)
-    {
-        if (!Directory.Exists(path))
-        {
-            return;
-        }
-
-        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-        {
-            File.SetAttributes(file, FileAttributes.Normal);
-        }
-
-        Directory.Delete(path, true);
-    }
 }

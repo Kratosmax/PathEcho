@@ -24,6 +24,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("单向同步可复制并在删除前备份", TestOneWaySyncAsync),
     ("双向冲突默认保留两份", TestBidirectionalConflictAsync),
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
+    ("备份失败会完整暂存并恢复写入", TestBackupRetryRecoveryAsync),
+    ("备份重试每批询问且停止时保留完整副本", TestBackupRetryPromptAsync),
+    ("备份重试可取消且清理失败不重复快照", TestBackupRetryCancellationAndPruneAsync),
     ("目录变化可合并触发自动同步", TestSyncMonitorAsync),
     ("同一任务并发同步会串行更新基线", TestSyncTaskRunnerSerializationAsync),
     ("同步过滤与预演共用规划且不修改目录", TestSyncFiltersAndPreviewAsync),
@@ -31,6 +34,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("只读表格不会进入编辑模式", TestReadOnlyDataGridContractAsync),
     ("设置保存会提交线路表格编辑", TestSettingsGridCommitContractAsync),
     ("未保存编辑在关闭或离开页面前会确认", TestUnsavedChangesContractAsync),
+    ("存档历史可筛选且游戏支持双击编辑", TestGameHistoryAndEditingContractAsync),
     ("失败的界面操作不会覆盖成成功状态", TestUiActionResultContractAsync),
     ("重复启动会激活主实例且不会错误释放锁", TestSingleInstanceCoordinatorAsync),
     ("更新事务锁可跨线程安全交接且阻止并发更新", TestUpdateTransactionGateAsync),
@@ -224,6 +228,122 @@ async Task TestSnapshotStoreAsync()
     Equal(1, removed, "旧快照未按版本数清理。");
     Equal(1, Directory.EnumerateDirectories(Path.Combine(backup, profileId.ToString("N"), "snapshots")).Count(), "保留快照数量不正确。");
     Equal(1, Directory.EnumerateFiles(Path.Combine(backup, profileId.ToString("N"), "objects"), "*.blob", SearchOption.AllDirectories).Count(), "去重对象清理不正确。");
+}
+
+async Task TestBackupRetryRecoveryAsync()
+{
+    var root = Path.Combine(testRoot, "backup-retry-recovery");
+    var save = Path.Combine(root, "save");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(Path.Combine(save, "nested"));
+    await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "stable-save");
+    await File.WriteAllTextAsync(Path.Combine(save, "nested", "profile.dat"), "profile");
+    var profile = new GameBackupProfile { Name = "重试测试", SaveDirectory = save, Triggers = BackupTrigger.None };
+    var snapshotStore = new FaultInjectingSnapshotStore(createFailures: 1);
+    var stagingStore = new FaultInjectingStagingStore(createFailures: 2);
+    var service = new GameBackupService(
+        profile,
+        backup,
+        snapshotStore,
+        stagingStore,
+        new BackupRetryOptions { Delay = TimeSpan.Zero, AttemptsPerPrompt = 10 });
+
+    var result = await service.CreateAsync(BackupTrigger.None);
+
+    True(result is not null, "重试后没有创建快照。");
+    Equal(3, stagingStore.CreateAttempts, "源存档读取失败后没有持续重试。");
+    Equal(2, result!.FileCount, "暂存副本没有包含全部文件。");
+    True(File.Exists(Path.Combine(result.SnapshotDirectory, "files", "nested", "profile.dat")), "嵌套存档未从暂存副本写入正式备份。");
+    var profileTemp = Path.Combine(backup, "temp", profile.Id.ToString("N"));
+    True(!Directory.Exists(profileTemp) || !Directory.EnumerateDirectories(profileTemp).Any(), "成功后没有清理本次临时副本。");
+}
+
+async Task TestBackupRetryPromptAsync()
+{
+    var root = Path.Combine(testRoot, "backup-retry-prompt");
+    var save = Path.Combine(root, "save");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(save);
+    await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "keep-me");
+    var profile = new GameBackupProfile { Name = "提示测试", SaveDirectory = save, Triggers = BackupTrigger.None };
+    var continuePrompts = 0;
+    var recoveringStore = new FaultInjectingSnapshotStore(createFailures: 11);
+    var recoveringService = new GameBackupService(
+        profile,
+        backup,
+        recoveringStore,
+        retryOptions: new BackupRetryOptions
+        {
+            Delay = TimeSpan.Zero,
+            AttemptsPerPrompt = 10,
+            ConfirmContinueAsync = (prompt, _) =>
+            {
+                continuePrompts++;
+                Equal(BackupRetryStage.WritingBackup, prompt.Stage, "写入失败提示的阶段不正确。");
+                Equal(10, prompt.FailedAttempts, "没有在连续失败十次时询问。");
+                return Task.FromResult(true);
+            },
+        });
+
+    var recovered = await recoveringService.CreateAsync(BackupTrigger.None);
+    True(recovered is not null, "用户选择继续后未恢复备份。");
+    Equal(1, continuePrompts, "每十次失败的询问次数不正确。");
+
+    var stoppingStore = new FaultInjectingSnapshotStore(createFailures: int.MaxValue);
+    var stoppingService = new GameBackupService(
+        profile,
+        backup,
+        stoppingStore,
+        retryOptions: new BackupRetryOptions
+        {
+            Delay = TimeSpan.Zero,
+            AttemptsPerPrompt = 2,
+            ConfirmContinueAsync = (_, _) => Task.FromResult(false),
+        });
+    try
+    {
+        await stoppingService.CreateAsync(BackupTrigger.None);
+        throw new InvalidOperationException("用户停止后备份仍继续运行。");
+    }
+    catch (BackupRetryStoppedException exception)
+    {
+        True(exception.StagingDirectory is not null, "停止写入重试时没有报告临时副本位置。");
+        True(File.Exists(Path.Combine(exception.StagingDirectory!, "files", "slot.sav")), "停止后未保留完整临时副本。");
+        Equal("keep-me", await File.ReadAllTextAsync(Path.Combine(exception.StagingDirectory!, "files", "slot.sav")), "保留的临时副本内容不正确。");
+    }
+}
+
+async Task TestBackupRetryCancellationAndPruneAsync()
+{
+    var root = Path.Combine(testRoot, "backup-retry-cancel");
+    var save = Path.Combine(root, "save");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(save);
+    await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "cancel-me");
+    var profile = new GameBackupProfile { Name = "取消测试", SaveDirectory = save, Triggers = BackupTrigger.None };
+    var failingStore = new FaultInjectingSnapshotStore(createFailures: int.MaxValue);
+    var service = new GameBackupService(
+        profile,
+        backup,
+        failingStore,
+        retryOptions: new BackupRetryOptions { Delay = TimeSpan.FromSeconds(5), AttemptsPerPrompt = 10 });
+    using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+    var stopwatch = Stopwatch.StartNew();
+    await ExpectThrowsAsync<OperationCanceledException>(
+        () => service.CreateAsync(BackupTrigger.None, cancellation.Token),
+        "取消没有结束备份重试。");
+    True(stopwatch.Elapsed < TimeSpan.FromSeconds(2), "取消后仍等待完整的五秒重试间隔。");
+
+    var pruneStore = new FaultInjectingSnapshotStore(pruneFailures: 2);
+    var pruneService = new GameBackupService(
+        profile,
+        backup,
+        pruneStore,
+        retryOptions: new BackupRetryOptions { Delay = TimeSpan.Zero, AttemptsPerPrompt = 10 });
+    var result = await pruneService.CreateAsync(BackupTrigger.None);
+    True(result is not null, "旧版本清理恢复后没有返回已创建快照。");
+    Equal(1, pruneStore.CreateAttempts, "旧版本清理失败时重复创建了快照。");
+    Equal(3, pruneStore.PruneAttempts, "旧版本清理没有持续重试到成功。");
 }
 
 async Task TestSyncMonitorAsync()
@@ -1031,6 +1151,23 @@ Task TestReleasePackageVerificationContractAsync()
     return Task.CompletedTask;
 }
 
+Task TestGameHistoryAndEditingContractAsync()
+{
+    var windowXaml = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml"));
+    var windowCode = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml.cs"));
+    var editorCode = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "GameProfileEditorWindow.xaml.cs"));
+    var runtimeCode = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Services", "PathEchoRuntime.cs"));
+
+    True(windowXaml.Contains("x:Name=\"HistorySearchBox\"", StringComparison.Ordinal), "存档历史缺少搜索框。");
+    True(windowXaml.Contains("x:Name=\"HistoryGameFilter\"", StringComparison.Ordinal), "存档历史缺少游戏筛选。");
+    True(windowXaml.Contains("MouseDoubleClick=\"OnGameRowDoubleClick\"", StringComparison.Ordinal), "游戏表格没有双击编辑入口。");
+    True(windowCode.Contains("row.Profile.Id != selectedProfileId", StringComparison.Ordinal), "历史筛选没有按游戏 ID 区分同名游戏。");
+    True(windowCode.Contains("QueueHistoryRefresh", StringComparison.Ordinal), "大量历史记录刷新没有合并 UI 更新。");
+    True(editorCode.Contains("updated with { Id = _existingProfile.Id", StringComparison.Ordinal), "编辑游戏时没有保留原配置 ID。");
+    True(runtimeCode.Contains("manager.MoveProfileAsync", StringComparison.Ordinal), "编辑单独备份目录时没有迁移现有备份。");
+    return Task.CompletedTask;
+}
+
 static void True(bool condition, string message)
 {
     if (!condition)
@@ -1136,4 +1273,64 @@ sealed class DelegateHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMes
 {
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         Task.FromResult(send(request));
+}
+
+sealed class FaultInjectingSnapshotStore(int createFailures = 0, int pruneFailures = 0) : IBackupSnapshotStore
+{
+    private readonly SnapshotStore _inner = new();
+
+    public int CreateAttempts { get; private set; }
+
+    public int PruneAttempts { get; private set; }
+
+    public Task<SnapshotCreationResult> CreateAsync(
+        Guid profileId,
+        string sourceDirectory,
+        string backupDirectory,
+        string trigger,
+        CancellationToken cancellationToken = default)
+    {
+        CreateAttempts++;
+        if (CreateAttempts <= createFailures)
+        {
+            throw new IOException($"模拟写入失败 {CreateAttempts}");
+        }
+
+        return _inner.CreateAsync(profileId, sourceDirectory, backupDirectory, trigger, cancellationToken);
+    }
+
+    public Task<int> PruneAsync(
+        Guid profileId,
+        string backupDirectory,
+        int retainedVersions,
+        CancellationToken cancellationToken = default)
+    {
+        PruneAttempts++;
+        if (PruneAttempts <= pruneFailures)
+        {
+            throw new IOException($"模拟清理失败 {PruneAttempts}");
+        }
+
+        return _inner.PruneAsync(profileId, backupDirectory, retainedVersions, cancellationToken);
+    }
+}
+
+sealed class FaultInjectingStagingStore(int createFailures) : IBackupStagingStore
+{
+    private readonly BackupStagingStore _inner = new();
+
+    public int CreateAttempts { get; private set; }
+
+    public Task<string> CreateAsync(string sourceDirectory, string transactionDirectory, CancellationToken cancellationToken)
+    {
+        CreateAttempts++;
+        if (CreateAttempts <= createFailures)
+        {
+            throw new IOException($"模拟读取失败 {CreateAttempts}");
+        }
+
+        return _inner.CreateAsync(sourceDirectory, transactionDirectory, cancellationToken);
+    }
+
+    public void DeleteIfPresent(string transactionDirectory) => _inner.DeleteIfPresent(transactionDirectory);
 }

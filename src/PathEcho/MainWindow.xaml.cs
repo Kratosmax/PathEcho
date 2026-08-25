@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using PathEcho.Core.Backup;
 using PathEcho.Core.Restore;
@@ -25,6 +26,8 @@ public partial class MainWindow : Window
 {
     private readonly PathEchoRuntime _runtime;
     private readonly ICollectionView _syncTaskView;
+    private readonly ICollectionView _historyView;
+    private bool _historyRefreshQueued;
     private string _selectedView = "Sync";
     private string _settingsSnapshot = string.Empty;
 
@@ -44,6 +47,10 @@ public partial class MainWindow : Window
         _syncTaskView = CollectionViewSource.GetDefaultView(runtime.SyncTasks);
         _syncTaskView.Filter = MatchesSyncFilter;
         SyncGrid.ItemsSource = _syncTaskView;
+        _historyView = CollectionViewSource.GetDefaultView(runtime.History);
+        _historyView.Filter = MatchesHistoryFilter;
+        HistoryGrid.ItemsSource = _historyView;
+        RefreshHistoryGameFilter();
         SyncStatusFilter.ItemsSource = new[] { "全部状态", "可用", "目录异常", "同步中", "失败" };
         SyncStatusFilter.SelectedIndex = 0;
         ReloadSettingsControls();
@@ -60,8 +67,31 @@ public partial class MainWindow : Window
 
     private void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
+        if (ReferenceEquals(sender, _runtime.History))
+        {
+            QueueHistoryRefresh();
+            return;
+        }
+
         _syncTaskView.Refresh();
         UpdateEmptyStates();
+    }
+
+    private void QueueHistoryRefresh()
+    {
+        if (_historyRefreshQueued)
+        {
+            return;
+        }
+
+        _historyRefreshQueued = true;
+        Dispatcher.BeginInvoke(() =>
+        {
+            _historyRefreshQueued = false;
+            RefreshHistoryGameFilter();
+            _historyView.Refresh();
+            UpdateEmptyStates();
+        }, DispatcherPriority.DataBind);
     }
 
     private void UpdateEmptyStates()
@@ -80,8 +110,10 @@ public partial class MainWindow : Window
         RunAllSyncButton.IsEnabled = syncCount > 0;
         GameEmpty.Visibility = _runtime.GameProfiles.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         GameGrid.Visibility = _runtime.GameProfiles.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        var visibleHistoryCount = _historyView.Cast<object>().Count();
         HistoryEmpty.Visibility = _runtime.History.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        HistoryGrid.Visibility = _runtime.History.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        HistoryNoResults.Visibility = _runtime.History.Count > 0 && visibleHistoryCount == 0 ? Visibility.Visible : Visibility.Collapsed;
+        HistoryGrid.Visibility = visibleHistoryCount == 0 ? Visibility.Collapsed : Visibility.Visible;
         SyncRunsEmpty.Visibility = _runtime.SyncRuns.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         SyncRunsGrid.Visibility = _runtime.SyncRuns.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -112,6 +144,11 @@ public partial class MainWindow : Window
     public void SelectFirstSyncTaskForPreview()
     {
         SyncGrid.SelectedIndex = SyncGrid.Items.Count > 0 ? 0 : -1;
+    }
+
+    public void SelectFirstGameForPreview()
+    {
+        GameGrid.SelectedIndex = GameGrid.Items.Count > 0 ? 0 : -1;
     }
 
     private void SelectView(string selected)
@@ -791,8 +828,106 @@ public partial class MainWindow : Window
 
     private void OnGameSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        DeleteGameButton.IsEnabled = GameGrid.SelectedItem is GameProfileRow;
+        var selected = GameGrid.SelectedItem is GameProfileRow;
+        EditGameButton.IsEnabled = selected;
+        DeleteGameButton.IsEnabled = selected;
     }
+
+    private void OnEditGame(object sender, RoutedEventArgs e)
+    {
+        if (GameGrid.SelectedItem is GameProfileRow row)
+        {
+            EditGame(row);
+        }
+    }
+
+    private void OnGameRowDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source ||
+            FindAncestor<Button>(source) is not null ||
+            ItemsControl.ContainerFromElement(GameGrid, source) is not DataGridRow { Item: GameProfileRow row })
+        {
+            return;
+        }
+
+        e.Handled = true;
+        EditGame(row);
+    }
+
+    private async void EditGame(GameProfileRow row)
+    {
+        var dialog = new GameProfileEditorWindow(row.Definition) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is null)
+        {
+            return;
+        }
+
+        if (await RunUiActionAsync("正在保存游戏存档", () => _runtime.UpdateGameProfileAsync(dialog.Result)))
+        {
+            StatusText.Text = $"{dialog.Result.Name} 已更新";
+        }
+    }
+
+    private void OnHistoryFilterChanged(object sender, EventArgs e)
+    {
+        if (!IsInitialized || _historyView is null)
+        {
+            return;
+        }
+
+        RefreshHistoryFilter();
+    }
+
+    private bool MatchesHistoryFilter(object item)
+    {
+        if (item is not HistoryRow row)
+        {
+            return false;
+        }
+
+        if (HistoryGameFilter?.SelectedItem is HistoryGameFilterOption { ProfileId: { } selectedProfileId } &&
+            row.Profile.Id != selectedProfileId)
+        {
+            return false;
+        }
+
+        var query = HistorySearchBox?.Text.Trim() ?? string.Empty;
+        return query.Length == 0 || new[]
+        {
+            row.GameName, row.CreatedAt, row.Trigger, row.SnapshotDirectory,
+        }.Any(value => value.Contains(query, StringComparison.CurrentCultureIgnoreCase));
+    }
+
+    private void RefreshHistoryFilter()
+    {
+        HistorySearchHint.Visibility = string.IsNullOrEmpty(HistorySearchBox.Text)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        _historyView.Refresh();
+        UpdateEmptyStates();
+    }
+
+    private void RefreshHistoryGameFilter()
+    {
+        var selectedProfileId = (HistoryGameFilter.SelectedItem as HistoryGameFilterOption)?.ProfileId;
+        var games = new[] { new HistoryGameFilterOption(null, "全部游戏") }
+            .Concat(_runtime.History
+                .GroupBy(row => row.Profile.Id)
+                .Select(group => new HistoryGameFilterOption(group.Key, group.First().GameName))
+                .OrderBy(option => option.Name, StringComparer.CurrentCultureIgnoreCase))
+            .ToArray();
+        HistoryGameFilter.ItemsSource = games;
+        HistoryGameFilter.SelectedItem = games.FirstOrDefault(option => option.ProfileId == selectedProfileId) ?? games[0];
+    }
+
+    private void OnClearHistoryFilter(object sender, RoutedEventArgs e)
+    {
+        HistorySearchBox.Clear();
+        HistoryGameFilter.SelectedIndex = 0;
+        HistorySearchBox.Focus();
+    }
+
+    private sealed record HistoryGameFilterOption(Guid? ProfileId, string Name);
 
     private async void OnDeleteSync(object sender, RoutedEventArgs e)
     {

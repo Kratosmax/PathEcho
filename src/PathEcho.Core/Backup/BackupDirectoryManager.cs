@@ -82,12 +82,12 @@ public sealed class BackupDirectoryManager
         {
             await CopyAndVerifyTreeAsync(source, stage, cancellationToken).ConfigureAwait(false);
             Directory.Move(stage, destination);
-            DeleteTree(source);
+            DirectoryTree.DeleteIfPresent(source);
             return true;
         }
         catch
         {
-            DeleteTree(stage);
+            DirectoryTree.DeleteIfPresent(stage);
             throw;
         }
     }
@@ -114,7 +114,7 @@ public sealed class BackupDirectoryManager
         }
         catch
         {
-            DeleteTree(stage);
+            DirectoryTree.DeleteIfPresent(stage);
             throw;
         }
     }
@@ -242,18 +242,4 @@ public sealed class BackupDirectoryManager
         return combined;
     }
 
-    private static void DeleteTree(string path)
-    {
-        if (!Directory.Exists(path))
-        {
-            return;
-        }
-
-        foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
-        {
-            File.SetAttributes(file, FileAttributes.Normal);
-        }
-
-        Directory.Delete(path, true);
-    }
 }

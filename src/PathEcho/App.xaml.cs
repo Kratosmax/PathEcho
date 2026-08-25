@@ -107,6 +107,11 @@ public partial class App : System.Windows.Application
                 _mainWindow.SelectFirstSyncTaskForPreview();
             }
 
+            if (string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_SELECT_FIRST_GAME"), "1", StringComparison.Ordinal))
+            {
+                _mainWindow.SelectFirstGameForPreview();
+            }
+
             await CapturePreviewAsync(capturePath);
         }
     }

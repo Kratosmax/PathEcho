@@ -9,6 +9,7 @@ namespace PathEcho.Dialogs;
 
 public partial class GameProfileEditorWindow : Window
 {
+    private readonly GameBackupProfile? _existingProfile;
     private readonly UnsavedChangesGuard _unsavedChanges;
 
     public GameProfileEditorWindow(DiscoveredGame? discoveredGame = null)
@@ -23,6 +24,29 @@ public partial class GameProfileEditorWindow : Window
             ProcessCheck.IsChecked = true;
         }
 
+        _unsavedChanges = new UnsavedChangesGuard(this, CaptureState);
+    }
+
+    public GameProfileEditorWindow(GameBackupProfile profile)
+    {
+        _existingProfile = profile;
+        InitializeComponent();
+        WindowBackdrop.Attach(this);
+        Title = "编辑游戏存档";
+        TitleText.Text = "编辑游戏存档";
+        SubmitButton.Content = "保存";
+        NameBox.Text = profile.Name;
+        SavePathBox.Text = profile.SaveDirectory;
+        BackupPathBox.Text = profile.BackupDirectory ?? string.Empty;
+        ScheduledCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.Scheduled);
+        ImportantCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.ImportantFileChanged);
+        ChangedCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.ChangedFiles);
+        ProcessCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.ProcessExited);
+        ScheduleBox.Text = profile.ScheduleInterval.TotalMinutes.ToString("0.##");
+        MinimumBox.Text = profile.MinimumBackupInterval.TotalMinutes.ToString("0.##");
+        VersionsBox.Text = profile.RetainedVersions.ToString();
+        PatternsBox.Text = string.Join(Environment.NewLine, profile.ImportantFilePatterns);
+        ProcessPathBox.Text = profile.ProcessExecutablePath ?? string.Empty;
         _unsavedChanges = new UnsavedChangesGuard(this, CaptureState);
     }
 
@@ -75,7 +99,7 @@ public partial class GameProfileEditorWindow : Window
             if (ChangedCheck.IsChecked == true) triggers |= BackupTrigger.ChangedFiles;
             if (ProcessCheck.IsChecked == true) triggers |= BackupTrigger.ProcessExited;
 
-            Result = new GameBackupProfile
+            var updated = new GameBackupProfile
             {
                 Name = NameBox.Text.Trim(),
                 SaveDirectory = SavePathBox.Text.Trim(),
@@ -87,6 +111,9 @@ public partial class GameProfileEditorWindow : Window
                 ImportantFilePatterns = PatternsBox.Text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                 ProcessExecutablePath = string.IsNullOrWhiteSpace(ProcessPathBox.Text) ? null : ProcessPathBox.Text.Trim(),
             };
+            Result = _existingProfile is null
+                ? updated
+                : updated with { Id = _existingProfile.Id, IsEnabled = _existingProfile.IsEnabled };
             Result.Validate();
             _unsavedChanges.MarkSaved();
             DialogResult = true;

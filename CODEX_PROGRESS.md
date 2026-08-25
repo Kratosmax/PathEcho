@@ -17,8 +17,8 @@ dotnet --version
 
 ## 当前快照
 
-- 最后核验：2026-08-23，Asia/Shanghai。
-- 版本：`0.2.8` 候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
+- 最后核验：2026-08-26，Asia/Shanghai。
+- 版本：`0.3.0` 候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
 - 分支：`main`；上一正式版本为 `0.2.7`，历史正式标签保持固定，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
@@ -56,13 +56,17 @@ dotnet --version
 - 智能游戏识别从 GitHub 签名目录匹配当前运行进程，复用更新的 URL 前缀线路和 HTTP 出网代理，具备结构/大小/签名校验、原子缓存、离线回退和修订号防回退。
 - `config/game-catalog.source.json` 由独立 GitHub Actions 工作流用现有正式密钥签为 `config/game-catalog.json`；游戏规则可独立更新，不需要重新发布程序包。
 - 预览模式使用隔离的内存配置和独立单实例锁，不读取真实用户配置，也不受已运行正式实例阻塞。
+- 游戏备份首次读写失败后在默认备份目录的 `temp\<游戏ID>\<事务ID>` 建立完整校验副本；读源、写正式备份和清理旧版本均按 5 秒重试，每 10 次询问是否继续，并受后台监听与运行时退出令牌取消。
+- 旧版本清理失败不会重复创建快照；停止正式写入重试时保留完整临时副本并报告路径，成功后清理本事务目录，目录清理不进入重解析点。
+- 存档历史支持搜索与按游戏 ID 筛选，大量版本的集合刷新会合并到一次 UI 调度；同名游戏不会混筛。
+- 游戏存档支持按钮和双击编辑；修改单独备份目录会迁移、校验并在保存失败时回滚，其他字段修改只重启对应监听。
 - 设置保存会先提交线路表格编辑、验证新备份目录可写，再原子写入并反序列化复核配置；默认目录改变时迁移已有隐式备份，没有可迁移数据或开机自启登记失败都会给出明确反馈。
 - “浏览”选择默认备份目录后会弹出迁移确认并立即复用设置保存链路；单实例协调器继续使用 `Local\PathEcho.SingleInstance` 兼容旧版，同时由专用线程持有 Mutex，第二实例只发送激活信号，不再错误释放锁。
 
 ## 当前待办
 
-- 当前没有已授权但未完成的开发或发布动作，等待用户下一项需求。
-- `v0.2.7` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.2.8` 一次；旧客户端无法通过新包修复自身尚未启动的新更新器代码。
+- 本地 `main` 保留上一轮尚未推送的自动更新提交，并叠加本轮待发布改动；用户已授权提交、推送、打标签和创建 `v0.3.0` Release。
+- `v0.2.7` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.0` 一次；旧客户端无法通过新包修复自身尚未启动的新更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
 
 ## 关键入口
@@ -80,6 +84,15 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-08-26 本地候选实际通过：
+
+- `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误。
+- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：31/31 通过；新增覆盖首次失败后完整暂存、源读取失败重试、写入十次询问、继续后成功、停止后保留完整副本、取消不等待完整 5 秒、成功清理 temp、清理旧版本失败不重复建快照，以及历史筛选/双击编辑契约。
+- `dotnet format PathEcho.sln --no-restore --verify-no-changes` 与 `git diff --check` 通过。
+- 本地 Lite 预览包 `temp/preview-0.3.0/PathEcho-0.3.0-Lite.zip`：548466 字节，SHA-256 `C3DC3A044992F4642D75BA4C5B8D4B826CCE6586AABBA636AF4217E6D10E483D`；包内版本、Lite 通道、程序集主版本和必需结构已核验，仅用于本地验收，不是 Release。
+- 真实 WPF 920×620 截图 `temp/ui-check/game-edit-entry-fixed-920x620.png` 与 `temp/ui-check/backup-history-filter-920x620.png` 已核验：游戏编辑入口启用，备份操作列可见，历史搜索/游戏筛选/打开/回档均无重叠、截断或横向滚动。
+- Windows 应用控制辅助工具两次初始化均因自身 `failed to write kernel assets: 系统找不到指定的路径` 失败，因此未完成自动化双击动作；事件绑定、编辑构造器字段回填和 ID 保留由编译与静态契约测试覆盖，视觉由真实 WPF 主窗截图覆盖。
 
 2026-08-23 本地功能分支实际通过：
 
@@ -167,7 +180,7 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前候选版本：`0.2.8`；上一正式版本为 `0.2.7`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+> 当前候选版本：`0.3.0`；上一正式版本为 `0.2.7`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
 
 `0.2.8` 本地候选验证：更新交接改用落盘握手，更新器全程持有独占锁，普通启动只瞬时探测更新事务以保留原有单实例唤醒；安装目录移动、回滚、卸载器保留和 launcher 复制使用有限文件占用重试并报告阶段/路径，失败写入独立轮转日志，半成品与过期缓存可清理。Release 与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 27/27、`dotnet format --verify-no-changes` 与 `git diff --check` 通过。Lite 预览包 `temp/preview-0.2.8-final/PathEcho-0.2.8-Lite.zip` 为 527726 字节，SHA-256 `19FDB471A8D585F1291F9BCE1DF347032A9ACDBE86A38D7B63DE21626F2D6883`；包内新更新器与 `v0.2.7` 原始更新器的版本/通道/哈希/结构预检均返回 0。1180×760 真实 WPF 截图位于 `temp/preview-0.2.8-final/main-window.png`，进程退出码 0。最终更新器在隔离安装副本中面对 1.2 秒独占文件仍完成替换、ready 和备份清理，退出码 0、事务残留 0。正式四包、签名清单、上一正式版到正式候选的签名升级链和线上资产尚待标签工作流与发布后验证。
 
