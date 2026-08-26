@@ -28,11 +28,19 @@ public sealed record GameBackupProfile
 
     public int RetainedVersions { get; init; } = 50;
 
+    public int RetainedHourlyVersions { get; init; } = 24;
+
+    public int RetainedDailyVersions { get; init; } = 30;
+
     public IReadOnlyList<string> ImportantFilePatterns { get; init; } = Array.Empty<string>();
 
     public string? ProcessExecutablePath { get; init; }
 
     public bool IsEnabled { get; init; } = true;
+
+    public BackupNotificationMode BackupNotificationMode { get; init; } = BackupNotificationMode.Inherit;
+
+    public BackupNotificationSettings? BackupNotificationSettings { get; init; }
 
     public void Validate()
     {
@@ -49,6 +57,16 @@ public sealed record GameBackupProfile
         if (RetainedVersions < 1)
         {
             throw new InvalidOperationException("至少保留一个备份版本。");
+        }
+
+        if (RetainedHourlyVersions < 0)
+        {
+            throw new InvalidOperationException("每小时锚点数量不能小于零。");
+        }
+
+        if (RetainedDailyVersions < 0)
+        {
+            throw new InvalidOperationException("每日锚点数量不能小于零。");
         }
 
         if (ScheduleInterval <= TimeSpan.Zero)

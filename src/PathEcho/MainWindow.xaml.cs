@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using PathEcho.Core.Backup;
+using PathEcho.Core.Models;
 using PathEcho.Core.Restore;
 using PathEcho.Core.Update;
 using PathEcho.Dialogs;
@@ -39,6 +40,8 @@ public partial class MainWindow : Window
     {
         _runtime = runtime;
         InitializeComponent();
+        BackupNotificationEditor.PreviewRequested += (_, settings) =>
+            ((App)System.Windows.Application.Current).PreviewBackupNotification(settings);
         WindowBackdrop.Attach(this);
         var currentVersion = ApplicationUpdateService.CurrentVersion;
         SidebarVersionText.Text = $"v{currentVersion}";
@@ -189,7 +192,7 @@ public partial class MainWindow : Window
 
     private async Task AddGameAsync(PathEcho.Core.GameCatalog.DiscoveredGame? discoveredGame = null)
     {
-        var dialog = new GameProfileEditorWindow(discoveredGame) { Owner = this };
+        var dialog = new GameProfileEditorWindow(discoveredGame, _runtime.Configuration.DefaultBackupNotification) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.Result is null)
         {
             return;
@@ -330,6 +333,19 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnHistoryRowDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject source ||
+            FindAncestor<Button>(source) is not null ||
+            ItemsControl.ContainerFromElement(HistoryGrid, source) is not DataGridRow { Item: HistoryRow row })
+        {
+            return;
+        }
+
+        e.Handled = true;
+        new SnapshotFilesWindow(row) { Owner = this }.ShowDialog();
+    }
+
     private async void OnRestoreRow(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not HistoryRow row)
@@ -442,6 +458,8 @@ public partial class MainWindow : Window
                 MinimizedCheck.IsChecked == true,
                 UpdateCheck.IsChecked == true,
                 DebugLogCheck.IsChecked == true,
+                BackupNotificationCheck.IsChecked == true,
+                BackupNotificationEditor.GetSettings(),
                 BackupDirectoryBox.Text.Trim(),
                 BuildUpdateNetworkOptions());
             ReloadSettingsControls();
@@ -463,6 +481,8 @@ public partial class MainWindow : Window
         MinimizedCheck.IsChecked = _runtime.Configuration.StartMinimized;
         UpdateCheck.IsChecked = _runtime.Configuration.CheckForUpdates;
         DebugLogCheck.IsChecked = _runtime.Configuration.EnableDebugLogging;
+        BackupNotificationCheck.IsChecked = _runtime.Configuration.AutomaticBackupNotificationsEnabled;
+        BackupNotificationEditor.LoadSettings(_runtime.Configuration.DefaultBackupNotification);
         BackupDirectoryBox.Text = _runtime.Configuration.DefaultBackupDirectory;
         HttpProxyBox.Text = _runtime.Configuration.UpdateNetwork.HttpProxy ?? string.Empty;
         UpdateRoutes.Clear();
@@ -517,6 +537,8 @@ public partial class MainWindow : Window
         MinimizedCheck.IsChecked,
         UpdateCheck.IsChecked,
         DebugLogCheck.IsChecked,
+        BackupNotificationCheck.IsChecked,
+        BackupNotificationEditor.CaptureState(),
         BackupDirectoryBox.Text,
         HttpProxyBox.Text,
         string.Join('\u001e', UpdateRoutes.Select(route => $"{route.IsDirect}\u001d{route.BaseUrl}\u001d{route.Priority}")));
@@ -864,7 +886,7 @@ public partial class MainWindow : Window
 
     private async void EditGame(GameProfileRow row)
     {
-        var dialog = new GameProfileEditorWindow(row.Definition) { Owner = this };
+        var dialog = new GameProfileEditorWindow(row.Definition, _runtime.Configuration.DefaultBackupNotification) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.Result is null)
         {
             return;

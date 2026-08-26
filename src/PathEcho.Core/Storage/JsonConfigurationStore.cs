@@ -26,8 +26,9 @@ public sealed class JsonConfigurationStore
         }
 
         await using var stream = new FileStream(_path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-        return await JsonSerializer.DeserializeAsync<AppConfiguration>(stream, SerializerOptions, cancellationToken)
+        var configuration = await JsonSerializer.DeserializeAsync<AppConfiguration>(stream, SerializerOptions, cancellationToken)
             .ConfigureAwait(false) ?? new AppConfiguration();
+        return Normalize(configuration);
     }
 
     public async Task SaveAsync(AppConfiguration configuration, CancellationToken cancellationToken = default) =>
@@ -73,7 +74,13 @@ public sealed class JsonConfigurationStore
     private static async Task<AppConfiguration> LoadFileAsync(string path, CancellationToken cancellationToken)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-        return await JsonSerializer.DeserializeAsync<AppConfiguration>(stream, SerializerOptions, cancellationToken)
+        var configuration = await JsonSerializer.DeserializeAsync<AppConfiguration>(stream, SerializerOptions, cancellationToken)
             .ConfigureAwait(false) ?? throw new InvalidDataException("配置内容为空。");
+        return Normalize(configuration);
     }
+
+    private static AppConfiguration Normalize(AppConfiguration configuration) =>
+        configuration.DefaultBackupNotification is null
+            ? configuration with { DefaultBackupNotification = new BackupNotificationSettings() }
+            : configuration;
 }

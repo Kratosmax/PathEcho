@@ -59,6 +59,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public ObservableCollection<SyncRunRow> SyncRuns { get; } = new();
 
+    public event EventHandler<AutomaticBackupNotification>? AutomaticBackupNotificationRequested;
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         Configuration = _previewMode
@@ -441,6 +443,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         bool startMinimized,
         bool checkForUpdates,
         bool enableDebugLogging,
+        bool automaticBackupNotificationsEnabled,
+        BackupNotificationSettings defaultBackupNotification,
         string defaultBackupDirectory,
         UpdateNetworkOptions updateNetwork,
         CancellationToken cancellationToken = default)
@@ -455,6 +459,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             StartMinimized = startMinimized,
             CheckForUpdates = checkForUpdates,
             EnableDebugLogging = enableDebugLogging,
+            AutomaticBackupNotificationsEnabled = automaticBackupNotificationsEnabled,
+            DefaultBackupNotification = defaultBackupNotification,
             DefaultBackupDirectory = newBackupRoot,
             UpdateNetwork = UpdateRoutePlanner.Normalize(updateNetwork),
         };
@@ -715,11 +721,13 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             SetGameStatus(profile.Id, $"已备份 {result.FileCount} 个文件");
             _ = RefreshHistorySafelyAsync();
+            RaiseAutomaticBackupNotification(profile, true, $"{result.FileCount} 个文件");
         };
         monitor.BackupFailed += (_, exception) =>
         {
             AppLogger.Error($"Automatic backup failed for profile {profile.Id:N}.", exception);
             SetGameStatus(profile.Id, $"失败：{exception.Message}");
+            RaiseAutomaticBackupNotification(profile, false, exception.Message);
         };
         try
         {
@@ -733,6 +741,20 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
         _gameMonitors.Add(profile.Id, monitor);
         SetGameStatus(profile.Id, "监听中");
+    }
+
+    private void RaiseAutomaticBackupNotification(GameBackupProfile profile, bool succeeded, string detail)
+    {
+        try
+        {
+            AutomaticBackupNotificationRequested?.Invoke(
+                this,
+                new AutomaticBackupNotification(profile, succeeded, detail));
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error($"Automatic backup notification failed for profile {profile.Id:N}.", exception);
+        }
     }
 
     private async Task StartGameMonitorSafelyAsync(GameBackupProfile profile)
@@ -1104,6 +1126,7 @@ public sealed class GameProfileRow : NotifyObject
     public string Name => Definition.Name;
     public string SaveDirectory => Definition.SaveDirectory;
     public int RetainedVersions => Definition.RetainedVersions;
+    public string RetentionSummary => $"{Definition.RetainedVersions} + {Definition.RetainedHourlyVersions}时 + {Definition.RetainedDailyVersions}日";
     public string Triggers => string.Join("、", new[]
     {
         Definition.Triggers.HasFlag(BackupTrigger.Scheduled) ? "定时" : null,
@@ -1162,6 +1185,11 @@ public sealed record SettingsSaveResult(
     int MovedBackupProfiles,
     int ProfilesWithoutBackups,
     string? StartupWarning);
+
+public sealed record AutomaticBackupNotification(
+    GameBackupProfile Profile,
+    bool Succeeded,
+    string Detail);
 
 public abstract class NotifyObject : INotifyPropertyChanged
 {

@@ -5,7 +5,10 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using PathEcho.Core.Models;
 using PathEcho.Core.Update;
+using PathEcho.Dialogs;
+using PathEcho.Notifications;
 using PathEcho.Platform.Windows.Instance;
 using PathEcho.Services;
 using Forms = System.Windows.Forms;
@@ -19,6 +22,7 @@ public partial class App : System.Windows.Application
     private MainWindow? _mainWindow;
     private Forms.NotifyIcon? _trayIcon;
     private Icon? _trayIconImage;
+    private BackupNotificationService? _backupNotifications;
     private bool _isExiting;
     private bool _activationRequested;
 
@@ -65,6 +69,8 @@ public partial class App : System.Windows.Application
         var previewSeed = e.Args.Contains("--preview-seed", StringComparer.OrdinalIgnoreCase);
         var background = e.Args.Contains("--background", StringComparer.OrdinalIgnoreCase);
         _runtime = new PathEchoRuntime(previewMode, previewSeed);
+        _backupNotifications = new BackupNotificationService();
+        _runtime.AutomaticBackupNotificationRequested += OnAutomaticBackupNotificationRequested;
         try
         {
             await _runtime.InitializeAsync();
@@ -96,6 +102,56 @@ public partial class App : System.Windows.Application
         var capturePath = Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_PATH");
         if (previewMode && !string.IsNullOrWhiteSpace(capturePath))
         {
+            var notificationTheme = Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_NOTIFICATION_THEME");
+            if (Enum.TryParse<BackupNotificationTheme>(notificationTheme, true, out var theme))
+            {
+                _mainWindow.Show();
+                var positionText = Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_NOTIFICATION_POSITION");
+                _ = Enum.TryParse<BackupNotificationPosition>(positionText, true, out var position);
+                await _backupNotifications.CapturePreviewAsync(
+                    capturePath,
+                    new BackupNotificationSettings { Theme = theme, Position = position },
+                    !string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_NOTIFICATION_RESULT"), "failure", StringComparison.OrdinalIgnoreCase));
+                ExitApplication(discardUnsavedSettings: true);
+                return;
+            }
+
+            if (string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_DIALOG"), "GameProfile", StringComparison.OrdinalIgnoreCase))
+            {
+                _mainWindow.Show();
+                var profile = _runtime.Configuration.GameProfiles.FirstOrDefault() ?? new GameBackupProfile();
+                var dialog = new GameProfileEditorWindow(profile, _runtime.Configuration.DefaultBackupNotification)
+                {
+                    Owner = _mainWindow,
+                };
+                if (string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_GAME_NOTIFICATION_CUSTOM"), "1", StringComparison.Ordinal))
+                {
+                    dialog.SelectCustomNotificationForPreview();
+                }
+                dialog.Show();
+                if (string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_GAME_NOTIFICATION_CUSTOM"), "1", StringComparison.Ordinal))
+                {
+                    await dialog.Dispatcher.InvokeAsync(dialog.ScrollNotificationIntoViewForPreview, DispatcherPriority.ApplicationIdle);
+                }
+                await CaptureWindowAsync(dialog, capturePath);
+                dialog.Close();
+                ExitApplication(discardUnsavedSettings: true);
+                return;
+            }
+
+            if (string.Equals(Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_DIALOG"), "SnapshotFiles", StringComparison.OrdinalIgnoreCase))
+            {
+                _mainWindow.Show();
+                var history = _runtime.History.FirstOrDefault()
+                    ?? throw new InvalidOperationException("预览数据中没有可显示的存档版本。");
+                var dialog = new SnapshotFilesWindow(history) { Owner = _mainWindow };
+                dialog.Show();
+                await CaptureWindowAsync(dialog, capturePath);
+                dialog.Close();
+                ExitApplication(discardUnsavedSettings: true);
+                return;
+            }
+
             var captureView = Environment.GetEnvironmentVariable("PATHECHO_CAPTURE_VIEW");
             if (!string.IsNullOrWhiteSpace(captureView))
             {
@@ -131,6 +187,24 @@ public partial class App : System.Windows.Application
 
         _mainWindow.Activate();
         _activationRequested = false;
+    }
+
+    internal void PreviewBackupNotification(BackupNotificationSettings settings) =>
+        _backupNotifications?.Preview(settings);
+
+    private void OnAutomaticBackupNotificationRequested(object? sender, AutomaticBackupNotification notification)
+    {
+        var settings = _runtime is null
+            ? null
+            : BackupNotificationResolver.Resolve(_runtime.Configuration, notification.Profile);
+        if (settings is null || Dispatcher.HasShutdownStarted)
+        {
+            return;
+        }
+
+        Dispatcher.BeginInvoke(() => _backupNotifications?.Show(
+            new BackupNotificationRequest(notification.Profile.Name, notification.Succeeded, notification.Detail),
+            settings));
     }
 
     private void ShowUpdateResult(string[] arguments)
@@ -334,6 +408,22 @@ public partial class App : System.Windows.Application
         ExitApplication(discardUnsavedSettings: true);
     }
 
+    private static async Task CaptureWindowAsync(Window window, string path)
+    {
+        await window.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.ApplicationIdle);
+        var dpi = VisualTreeHelper.GetDpi(window);
+        var pixelWidth = Math.Max(1, (int)Math.Ceiling(window.ActualWidth * dpi.DpiScaleX));
+        var pixelHeight = Math.Max(1, (int)Math.Ceiling(window.ActualHeight * dpi.DpiScaleY));
+        var bitmap = new RenderTargetBitmap(pixelWidth, pixelHeight, dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        await using var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
+        encoder.Save(stream);
+        await stream.FlushAsync();
+    }
+
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         AppLogger.Critical("Unhandled UI exception.", e.Exception);
@@ -348,6 +438,7 @@ public partial class App : System.Windows.Application
 
     private void OnExit(object sender, ExitEventArgs e)
     {
+        _backupNotifications?.Dispose();
         _trayIcon?.Dispose();
         _trayIconImage?.Dispose();
         _singleInstance?.Dispose();

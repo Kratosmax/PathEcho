@@ -13,6 +13,6 @@ public interface IBackupSnapshotStore
     Task<int> PruneAsync(
         Guid profileId,
         string backupDirectory,
-        int retainedVersions,
+        SnapshotRetentionPolicy policy,
         CancellationToken cancellationToken = default);
 }

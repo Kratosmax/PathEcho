@@ -1,0 +1,49 @@
+<UserControl x:Class="PathEcho.Controls.BackupNotificationEditor"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="外观" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <ComboBox x:Name="ThemeBox" DisplayMemberPath="Label"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="显示器" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <ComboBox x:Name="MonitorBox" DisplayMemberPath="Label"/>
+            </StackPanel>
+        </Grid>
+        <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="110"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="110"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel>
+                <TextBlock Text="位置" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <ComboBox x:Name="PositionBox" DisplayMemberPath="Label" SelectionChanged="OnPositionChanged"/>
+            </StackPanel>
+            <StackPanel Grid.Column="2">
+                <TextBlock Text="水平微调" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <TextBox x:Name="OffsetXBox" Text="0"/>
+            </StackPanel>
+            <StackPanel Grid.Column="4">
+                <TextBlock Text="垂直微调" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
+                <TextBox x:Name="OffsetYBox" Text="0"/>
+            </StackPanel>
+        </Grid>
+        <TextBlock Text="微调单位为像素；每个角的位置会独立保存，并限制在显示器工作区内。"
+                   Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,7,0,0" TextWrapping="Wrap"/>
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+            <Button Content="预览通知" Click="OnPreview"/>
+            <Button Content="重置当前位置" Click="OnResetCurrent" Margin="8,0,0,0"/>
+        </StackPanel>
+        <TextBlock x:Name="ErrorText" Foreground="{StaticResource DangerBrush}" Margin="0,7,0,0" TextWrapping="Wrap"/>
+    </StackPanel>
+</UserControl>

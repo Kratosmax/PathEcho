@@ -21,11 +21,13 @@ Directory.CreateDirectory(testRoot);
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("配置可原子保存并读取", TestConfigurationStoreAsync),
+    ("自动备份通知可继承、关闭并按游戏覆盖", TestBackupNotificationSettingsAsync),
     ("单向同步可复制并在删除前备份", TestOneWaySyncAsync),
     ("双向冲突默认保留两份", TestBidirectionalConflictAsync),
     ("同大小同时间戳变化在监听失效后仍可同步", TestSameStampInvalidationAsync),
     ("忽略删除优先于双向冲突策略", TestIgnoreDeletionConflictAsync),
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
+    ("快照按最近、每小时和每日分层保留", TestSnapshotRetentionPlannerAsync),
     ("增量快照可记录改名删除并兼容旧版本", TestIncrementalAndLegacySnapshotAsync),
     ("备份失败会完整暂存并恢复写入", TestBackupRetryRecoveryAsync),
     ("备份重试每批询问且停止时保留完整副本", TestBackupRetryPromptAsync),
@@ -112,8 +114,31 @@ async Task TestConfigurationStoreAsync()
         StartMinimized = true,
         CheckForUpdates = false,
         EnableDebugLogging = true,
+        AutomaticBackupNotificationsEnabled = false,
+        DefaultBackupNotification = new BackupNotificationSettings
+        {
+            Theme = BackupNotificationTheme.Light,
+            MonitorIndex = 1,
+            Position = BackupNotificationPosition.TopLeft,
+            Offsets = new BackupNotificationOffsets
+            {
+                TopLeft = new BackupNotificationOffset { X = 27, Y = -14 },
+            },
+        },
         DefaultBackupDirectory = Path.Combine(testRoot, "configuration-backups"),
         SyncTasks = new[] { task },
+        GameProfiles = new[]
+        {
+            new GameBackupProfile
+            {
+                Name = "分层保留测试",
+                SaveDirectory = Path.Combine(testRoot, "configuration-save"),
+                Triggers = BackupTrigger.None,
+                RetainedVersions = 12,
+                RetainedHourlyVersions = 8,
+                RetainedDailyVersions = 6,
+            },
+        },
         UpdateNetwork = new UpdateNetworkOptions
         {
             UrlRoutes = new[]
@@ -135,18 +160,124 @@ async Task TestConfigurationStoreAsync()
     False(actual.CheckForUpdates, "重载后自动更新设置未保持一致。");
     Equal(1, actual.SyncTasks.Count, "配置任务数量不正确。");
     Equal(task.Id, actual.SyncTasks[0].Id, "配置任务 ID 未保持一致。");
+    Equal(12, actual.GameProfiles[0].RetainedVersions, "最近版本数量未保持一致。");
+    Equal(8, actual.GameProfiles[0].RetainedHourlyVersions, "每小时锚点数量未保持一致。");
+    Equal(6, actual.GameProfiles[0].RetainedDailyVersions, "每日锚点数量未保持一致。");
     True(actual.EnableDebugLogging, "Debug 日志开关未保持一致。");
+    False(actual.AutomaticBackupNotificationsEnabled, "自动备份通知开关未保持一致。");
+    Equal(BackupNotificationTheme.Light, actual.DefaultBackupNotification.Theme, "通知主题未保持一致。");
+    Equal(BackupNotificationPosition.TopLeft, actual.DefaultBackupNotification.Position, "通知位置未保持一致。");
+    Equal(27, actual.DefaultBackupNotification.Offsets.TopLeft.X, "通知水平微调未保持一致。");
+    Equal(-14, actual.DefaultBackupNotification.Offsets.TopLeft.Y, "通知垂直微调未保持一致。");
     Equal(expected.DefaultBackupDirectory, actual.DefaultBackupDirectory, "默认备份目录未保持一致。");
     Equal(2, actual.UpdateNetwork.UrlRoutes.Count, "更新线路配置未保持一致。");
     Equal("http://127.0.0.1:7890", actual.UpdateNetwork.HttpProxy!, "HTTP 代理配置未保持一致。");
     False(Directory.EnumerateFiles(Path.GetDirectoryName(path)!, "*.tmp").Any(), "配置保存留下了暂存文件。");
 
     var legacyPath = Path.Combine(testRoot, "configuration", "legacy.json");
-    await File.WriteAllTextAsync(legacyPath, "{\"schemaVersion\":1}");
+    await File.WriteAllTextAsync(legacyPath, "{\"schemaVersion\":1,\"defaultBackupNotification\":null}");
     var legacy = await new JsonConfigurationStore(legacyPath).LoadAsync();
     Equal(1, legacy.UpdateNetwork.UrlRoutes.Count, "旧配置未恢复直连更新线路。");
     True(legacy.UpdateNetwork.UrlRoutes[0].IsDirect, "旧配置恢复的更新线路不是直连。");
     False(legacy.EnableDebugLogging, "旧配置错误启用了 Debug 日志。");
+    True(legacy.AutomaticBackupNotificationsEnabled, "旧配置未采用自动备份通知默认值。");
+    Equal(BackupNotificationTheme.Dark, legacy.DefaultBackupNotification.Theme, "旧配置未采用深色通知默认值。");
+}
+
+Task TestBackupNotificationSettingsAsync()
+{
+    var defaults = new BackupNotificationSettings
+    {
+        Theme = BackupNotificationTheme.Light,
+        Position = BackupNotificationPosition.TopRight,
+    };
+    var configuration = new AppConfiguration
+    {
+        AutomaticBackupNotificationsEnabled = true,
+        DefaultBackupNotification = defaults,
+    };
+    var profile = new GameBackupProfile
+    {
+        Name = "通知测试",
+        SaveDirectory = testRoot,
+        Triggers = BackupTrigger.None,
+    };
+
+    True(ReferenceEquals(defaults, BackupNotificationResolver.Resolve(configuration, profile)), "继承模式没有使用全局默认通知设置。");
+    True(BackupNotificationResolver.Resolve(configuration with { AutomaticBackupNotificationsEnabled = false }, profile) is null,
+        "关闭全局通知后，继承模式仍会通知。");
+    True(BackupNotificationResolver.Resolve(configuration, profile with { BackupNotificationMode = BackupNotificationMode.Disabled }) is null,
+        "游戏级关闭通知没有生效。");
+
+    var custom = new BackupNotificationSettings
+    {
+        Theme = BackupNotificationTheme.Dark,
+        Position = BackupNotificationPosition.BottomLeft,
+        MonitorIndex = 2,
+    };
+    var resolvedCustom = BackupNotificationResolver.Resolve(
+        configuration with { AutomaticBackupNotificationsEnabled = false },
+        profile with
+        {
+            BackupNotificationMode = BackupNotificationMode.Custom,
+            BackupNotificationSettings = custom,
+        });
+    True(ReferenceEquals(custom, resolvedCustom), "游戏级自定义错误受全局通知开关限制。");
+
+    var topLeft = BackupNotificationPlacement.Resolve(100, 50, 2020, 1130, 360, 100, 18, BackupNotificationPosition.TopLeft, 7, 9);
+    Equal(new BackupNotificationCoordinates(125, 77), topLeft, "左上角通知位置或微调计算错误。");
+    var bottomRight = BackupNotificationPlacement.Resolve(100, 50, 2020, 1130, 360, 100, 18, BackupNotificationPosition.BottomRight, -5, -6);
+    Equal(new BackupNotificationCoordinates(1637, 1006), bottomRight, "右下角通知位置或微调计算错误。");
+    var clamped = BackupNotificationPlacement.Resolve(100, 50, 2020, 1130, 360, 100, 18, BackupNotificationPosition.TopLeft, -5000, 5000);
+    Equal(new BackupNotificationCoordinates(100, 1030), clamped, "超大微调没有限制在显示器工作区内。");
+
+    var mainXaml = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml"));
+    var mainCode = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "MainWindow.xaml.cs"));
+    var editorXaml = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "GameProfileEditorWindow.xaml"));
+    var editorCode = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "GameProfileEditorWindow.xaml.cs"));
+    True(mainXaml.Contains("x:Name=\"BackupNotificationEditor\"", StringComparison.Ordinal), "设置页缺少默认通知编辑器。");
+    True(mainCode.Contains("BackupNotificationEditor.CaptureState()", StringComparison.Ordinal), "默认通知设置未纳入未保存检测。");
+    True(editorXaml.Contains("x:Name=\"NotificationModeBox\"", StringComparison.Ordinal), "游戏编辑页缺少通知覆盖模式。");
+    True(editorCode.Contains("NotificationEditor.CaptureState()", StringComparison.Ordinal), "游戏通知设置未纳入未保存检测。");
+    return Task.CompletedTask;
+}
+
+Task TestSnapshotRetentionPlannerAsync()
+{
+    var profileId = Guid.NewGuid();
+    var newest = new DateTimeOffset(2026, 8, 26, 12, 50, 0, TimeSpan.Zero);
+    var versions = new[]
+    {
+        Version("v0", newest),
+        Version("v1", newest.AddMinutes(-10)),
+        Version("v2", newest.AddMinutes(-20)),
+        Version("v3", newest.AddHours(-1)),
+        Version("v4", newest.AddHours(-1).AddMinutes(-30)),
+        Version("v5", newest.AddDays(-1).AddHours(5)),
+        Version("v6", newest.AddDays(-2)),
+    };
+
+    var retained = SnapshotRetentionPlanner.Select(versions, new SnapshotRetentionPolicy(2, 2, 2));
+    Equal(4, retained.Count, "三层保留结果没有正确去重。");
+    foreach (var expected in new[] { "v0", "v1", "v3", "v5" })
+    {
+        True(retained.Contains(expected), $"三层保留遗漏了 {expected}。");
+    }
+
+    Throws<ArgumentOutOfRangeException>(
+        () => SnapshotRetentionPlanner.Select(versions, new SnapshotRetentionPolicy(0, 1, 1)),
+        "最近版本为零时没有拒绝无效策略。");
+    return Task.CompletedTask;
+
+    SnapshotVersion Version(string path, DateTimeOffset createdAt) => new(
+        path,
+        new SnapshotManifest
+        {
+            ProfileId = profileId,
+            CreatedAtUtc = createdAt,
+            Trigger = "测试",
+            Files = Array.Empty<SnapshotFileEntry>(),
+        });
 }
 
 async Task TestOneWaySyncAsync()
@@ -295,7 +426,7 @@ async Task TestSnapshotStoreAsync()
     var second = await store.CreateAsync(profileId, source, backup, "测试");
     Equal(0, second.NewObjectCount, "未复用已有内容对象。");
     Equal(2, second.ReusedObjectCount, "复用对象数量不正确。");
-    var removed = await store.PruneAsync(profileId, backup, 1);
+    var removed = await store.PruneAsync(profileId, backup, new SnapshotRetentionPolicy(1, 0, 0));
     Equal(1, removed, "旧快照未按版本数清理。");
     Equal(1, Directory.EnumerateDirectories(Path.Combine(backup, profileId.ToString("N"), "snapshots")).Count(), "保留快照数量不正确。");
     Equal(1, Directory.EnumerateFiles(Path.Combine(backup, profileId.ToString("N"), "objects"), "*.blob", SearchOption.AllDirectories).Count(), "去重对象清理不正确。");
@@ -1468,12 +1599,17 @@ Task TestGameHistoryAndEditingContractAsync()
     True(windowXaml.Contains("x:Name=\"HistorySearchBox\"", StringComparison.Ordinal), "存档历史缺少搜索框。");
     True(windowXaml.Contains("x:Name=\"HistoryGameFilter\"", StringComparison.Ordinal), "存档历史缺少游戏筛选。");
     True(windowXaml.Contains("MouseDoubleClick=\"OnGameRowDoubleClick\"", StringComparison.Ordinal), "游戏表格没有双击编辑入口。");
+    True(windowXaml.Contains("MouseDoubleClick=\"OnHistoryRowDoubleClick\"", StringComparison.Ordinal), "版本历史没有双击查看文件入口。");
     True(windowCode.Contains("row.Profile.Id != selectedProfileId", StringComparison.Ordinal), "历史筛选没有按游戏 ID 区分同名游戏。");
     True(windowCode.Contains("QueueHistoryRefresh", StringComparison.Ordinal), "大量历史记录刷新没有合并 UI 更新。");
     True(windowCode.Contains("PrepareSnapshotBrowseAsync(row)", StringComparison.Ordinal), "打开历史版本没有生成独立浏览副本。");
     False(windowCode.Contains("Path.Combine(row.SnapshotDirectory, \"files\")", StringComparison.Ordinal), "界面仍直接打开可串改历史的旧 files 目录。");
     True(editorCode.Contains("updated with { Id = _existingProfile.Id", StringComparison.Ordinal), "编辑游戏时没有保留原配置 ID。");
     True(runtimeCode.Contains("manager.MoveProfileAsync", StringComparison.Ordinal), "编辑单独备份目录时没有迁移现有备份。");
+    var snapshotFilesXaml = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "SnapshotFilesWindow.xaml"));
+    True(snapshotFilesXaml.Contains("Header=\"文件名\"", StringComparison.Ordinal), "版本文件窗口缺少文件名列。");
+    True(snapshotFilesXaml.Contains("Header=\"修改时间\"", StringComparison.Ordinal), "版本文件窗口缺少修改时间列。");
+    True(snapshotFilesXaml.Contains("Header=\"大小\"", StringComparison.Ordinal), "版本文件窗口缺少文件大小列。");
     return Task.CompletedTask;
 }
 
@@ -1618,7 +1754,7 @@ sealed class FaultInjectingSnapshotStore(int createFailures = 0, int pruneFailur
     public Task<int> PruneAsync(
         Guid profileId,
         string backupDirectory,
-        int retainedVersions,
+        SnapshotRetentionPolicy policy,
         CancellationToken cancellationToken = default)
     {
         PruneAttempts++;
@@ -1627,7 +1763,7 @@ sealed class FaultInjectingSnapshotStore(int createFailures = 0, int pruneFailur
             throw new IOException($"模拟清理失败 {PruneAttempts}");
         }
 
-        return _inner.PruneAsync(profileId, backupDirectory, retainedVersions, cancellationToken);
+        return _inner.PruneAsync(profileId, backupDirectory, policy, cancellationToken);
     }
 }
 
@@ -1658,9 +1794,9 @@ sealed class RecordingSnapshotStore : IBackupSnapshotStore
     public Task<int> PruneAsync(
         Guid profileId,
         string backupDirectory,
-        int retainedVersions,
+        SnapshotRetentionPolicy policy,
         CancellationToken cancellationToken = default) =>
-        _inner.PruneAsync(profileId, backupDirectory, retainedVersions, cancellationToken);
+        _inner.PruneAsync(profileId, backupDirectory, policy, cancellationToken);
 }
 
 sealed class FaultInjectingStagingStore(int createFailures) : IBackupStagingStore

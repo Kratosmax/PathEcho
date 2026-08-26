@@ -74,7 +74,10 @@ public sealed class GameBackupService
                 token => _store.PruneAsync(
                     _profile.Id,
                     _backupDirectory,
-                    _profile.RetainedVersions,
+                    new SnapshotRetentionPolicy(
+                        _profile.RetainedVersions,
+                        _profile.RetainedHourlyVersions,
+                        _profile.RetainedDailyVersions),
                     token),
                 effectiveCancellation).ConfigureAwait(false);
             if (trigger == BackupTrigger.ImportantFileChanged)

@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Win32;
 using PathEcho.Core.GameCatalog;
 using PathEcho.Core.Models;
@@ -12,10 +13,15 @@ public partial class GameProfileEditorWindow : Window
     private readonly GameBackupProfile? _existingProfile;
     private readonly UnsavedChangesGuard _unsavedChanges;
 
-    public GameProfileEditorWindow(DiscoveredGame? discoveredGame = null)
+    public GameProfileEditorWindow(
+        DiscoveredGame? discoveredGame = null,
+        BackupNotificationSettings? defaultNotificationSettings = null)
     {
         InitializeComponent();
         WindowBackdrop.Attach(this);
+        InitializeNotificationControls(
+            BackupNotificationMode.Inherit,
+            defaultNotificationSettings ?? new BackupNotificationSettings());
         if (discoveredGame is not null)
         {
             NameBox.Text = discoveredGame.CatalogEntry.Name;
@@ -27,7 +33,9 @@ public partial class GameProfileEditorWindow : Window
         _unsavedChanges = new UnsavedChangesGuard(this, CaptureState);
     }
 
-    public GameProfileEditorWindow(GameBackupProfile profile)
+    public GameProfileEditorWindow(
+        GameBackupProfile profile,
+        BackupNotificationSettings? defaultNotificationSettings = null)
     {
         _existingProfile = profile;
         InitializeComponent();
@@ -45,12 +53,25 @@ public partial class GameProfileEditorWindow : Window
         ScheduleBox.Text = profile.ScheduleInterval.TotalMinutes.ToString("0.##");
         MinimumBox.Text = profile.MinimumBackupInterval.TotalMinutes.ToString("0.##");
         VersionsBox.Text = profile.RetainedVersions.ToString();
+        HourlyVersionsBox.Text = profile.RetainedHourlyVersions.ToString();
+        DailyVersionsBox.Text = profile.RetainedDailyVersions.ToString();
         PatternsBox.Text = string.Join(Environment.NewLine, profile.ImportantFilePatterns);
         ProcessPathBox.Text = profile.ProcessExecutablePath ?? string.Empty;
+        InitializeNotificationControls(
+            profile.BackupNotificationMode,
+            profile.BackupNotificationSettings ?? defaultNotificationSettings ?? new BackupNotificationSettings());
         _unsavedChanges = new UnsavedChangesGuard(this, CaptureState);
     }
 
     public GameBackupProfile? Result { get; private set; }
+
+    internal void SelectCustomNotificationForPreview()
+    {
+        NotificationModeBox.SelectedIndex = 2;
+        Height = 820;
+    }
+
+    internal void ScrollNotificationIntoViewForPreview() => RootScrollViewer.ScrollToEnd();
 
     private void OnBrowseSave(object sender, RoutedEventArgs e) => BrowseFolder(SavePathBox);
     private void OnBrowseBackup(object sender, RoutedEventArgs e) => BrowseFolder(BackupPathBox);
@@ -89,6 +110,35 @@ public partial class GameProfileEditorWindow : Window
         }
     }
 
+    private void InitializeNotificationControls(
+        BackupNotificationMode mode,
+        BackupNotificationSettings settings)
+    {
+        NotificationEditor.LoadSettings(settings);
+        NotificationEditor.PreviewRequested += (_, previewSettings) =>
+            ((App)System.Windows.Application.Current).PreviewBackupNotification(previewSettings);
+        NotificationModeBox.SelectedIndex = mode switch
+        {
+            BackupNotificationMode.Disabled => 1,
+            BackupNotificationMode.Custom => 2,
+            _ => 0,
+        };
+        UpdateNotificationEditorVisibility();
+    }
+
+    private void OnNotificationModeChanged(object sender, SelectionChangedEventArgs e) =>
+        UpdateNotificationEditorVisibility();
+
+    private void UpdateNotificationEditorVisibility()
+    {
+        if (NotificationEditor is not null)
+        {
+            NotificationEditor.Visibility = NotificationModeBox.SelectedIndex == 2
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+    }
+
     private void OnCreate(object sender, RoutedEventArgs e)
     {
         try
@@ -107,9 +157,18 @@ public partial class GameProfileEditorWindow : Window
                 Triggers = triggers,
                 ScheduleInterval = TimeSpan.FromMinutes(ParsePositive(ScheduleBox.Text, "定时间隔")),
                 MinimumBackupInterval = TimeSpan.FromMinutes(ParseNonNegative(MinimumBox.Text, "最低间隔")),
-                RetainedVersions = (int)ParsePositive(VersionsBox.Text, "保留版本"),
+                RetainedVersions = ParsePositiveInteger(VersionsBox.Text, "最近版本"),
+                RetainedHourlyVersions = ParseNonNegativeInteger(HourlyVersionsBox.Text, "每小时锚点"),
+                RetainedDailyVersions = ParseNonNegativeInteger(DailyVersionsBox.Text, "每日锚点"),
                 ImportantFilePatterns = PatternsBox.Text.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                 ProcessExecutablePath = string.IsNullOrWhiteSpace(ProcessPathBox.Text) ? null : ProcessPathBox.Text.Trim(),
+                BackupNotificationMode = NotificationModeBox.SelectedIndex switch
+                {
+                    1 => BackupNotificationMode.Disabled,
+                    2 => BackupNotificationMode.Custom,
+                    _ => BackupNotificationMode.Inherit,
+                },
+                BackupNotificationSettings = NotificationEditor.GetSettings(),
             };
             Result = _existingProfile is null
                 ? updated
@@ -144,6 +203,26 @@ public partial class GameProfileEditorWindow : Window
         return parsed;
     }
 
+    private static int ParsePositiveInteger(string value, string name)
+    {
+        if (!int.TryParse(value, out var parsed) || parsed < 1)
+        {
+            throw new InvalidOperationException($"{name}必须是大于零的整数。");
+        }
+
+        return parsed;
+    }
+
+    private static int ParseNonNegativeInteger(string value, string name)
+    {
+        if (!int.TryParse(value, out var parsed) || parsed < 0)
+        {
+            throw new InvalidOperationException($"{name}必须是大于或等于零的整数。");
+        }
+
+        return parsed;
+    }
+
     private string CaptureState() => string.Join('\u001f',
         NameBox.Text,
         SavePathBox.Text,
@@ -155,6 +234,10 @@ public partial class GameProfileEditorWindow : Window
         ScheduleBox.Text,
         MinimumBox.Text,
         VersionsBox.Text,
+        HourlyVersionsBox.Text,
+        DailyVersionsBox.Text,
         PatternsBox.Text,
-        ProcessPathBox.Text);
+        ProcessPathBox.Text,
+        NotificationModeBox.SelectedIndex,
+        NotificationEditor.CaptureState());
 }

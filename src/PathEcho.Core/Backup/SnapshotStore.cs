@@ -90,13 +90,10 @@ public sealed class SnapshotStore : IBackupSnapshotStore
     public async Task<int> PruneAsync(
         Guid profileId,
         string backupDirectory,
-        int retainedVersions,
+        SnapshotRetentionPolicy policy,
         CancellationToken cancellationToken = default)
     {
-        if (retainedVersions < 1)
-        {
-            throw new ArgumentOutOfRangeException(nameof(retainedVersions), "至少保留一个备份版本。");
-        }
+        policy.Validate();
 
         var profileRoot = Path.Combine(
             SafePath.NormalizeDirectory(backupDirectory, "备份目录不能为空。"),
@@ -107,12 +104,21 @@ public sealed class SnapshotStore : IBackupSnapshotStore
             return 0;
         }
 
-        var snapshots = EnumerateSnapshotDirectories(snapshotsRoot).ToArray();
-        var removed = 0;
-        foreach (var snapshot in snapshots.Skip(retainedVersions))
+        var snapshots = new List<SnapshotVersion>();
+        foreach (var snapshotDirectory in EnumerateSnapshotDirectories(snapshotsRoot))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            DirectoryTree.DeleteIfPresent(snapshot);
+            snapshots.Add(new SnapshotVersion(
+                snapshotDirectory,
+                await SnapshotContent.ReadManifestAsync(snapshotDirectory, cancellationToken).ConfigureAwait(false)));
+        }
+
+        var retained = SnapshotRetentionPlanner.Select(snapshots, policy);
+        var removed = 0;
+        foreach (var snapshot in snapshots.Where(snapshot => !retained.Contains(snapshot.SnapshotDirectory)))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DirectoryTree.DeleteIfPresent(snapshot.SnapshotDirectory);
             removed++;
         }
 

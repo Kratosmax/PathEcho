@@ -18,7 +18,7 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-26，Asia/Shanghai。
-- 版本：`0.4.0` 正式版，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。GitHub latest 已核验指向 `v0.4.0`。
+- 版本：`0.5.0` 发布候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。发布前 GitHub latest 仍已核验指向 `v0.4.0`。
 - 分支：`main`；正式标签 `v0.4.0` 指向功能提交 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`，历史正式标签保持固定。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - 当前发布代码基线：`v0.4.0` 固定在功能提交 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`；`main` 仅在其后追加本发布证据文档提交，产品代码与标签一致。
@@ -47,6 +47,7 @@ dotnet --version
 - 备份迁移与导入按清单复制唯一对象并逐项校验；发现功能按 `(ProfileId, ProfileRoot)` 区分同 ID 的多份备份。
 - 整目录、变动文件和正则文件事务回档，包含占用识别、PID 与启动时间校验、关键进程保护和失败回滚。
 - WPF 主界面、业务弹窗、托盘、当前用户开机自启、统一设置页和预览截图模式。
+- 自动备份成功/失败使用无焦点置顶小窗通知；全局默认支持深浅主题、目标显示器、四角位置和按位置独立 X/Y 微调，游戏可继承、关闭或单独覆盖。相同通知会合并计数，队列有界且坐标限制在显示器工作区。
 - Windows 11 build 22621+ 全客户区 Acrylic；DWM 返回失败、旧系统或 `PATHECHO_DISABLE_BACKDROP=1` 时完整回退为不透明 `#F4F7F8`。
 - ECDSA P-256/SHA-256 签名更新清单，签名覆盖产品、版本、通道、URL、SHA-256、大小和公告；客户端与外部更新器均验签验包。
 - Full/Lite 同通道更新，包含 URL 前缀线路、HTTP 出网代理、稳定故障转移、重定向 allowlist、下载大小与停滞限制、失败暂存清理、包结构与路径穿越检查。
@@ -67,13 +68,14 @@ dotnet --version
 - 游戏备份首次读写失败后在默认备份目录的 `temp\<游戏ID>\<事务ID>` 建立完整校验副本；读源、写正式备份和清理旧版本均按 5 秒重试，每 10 次询问是否继续，并受后台监听与运行时退出令牌取消。
 - 旧版本清理失败不会重复创建快照；停止正式写入重试时保留完整临时副本并报告路径，成功后清理本事务目录，目录清理不进入重解析点。
 - 存档历史支持搜索与按游戏 ID 筛选，大量版本的集合刷新会合并到一次 UI 调度；同名游戏不会混筛。
+- 游戏快照按最近版本、每小时锚点和每日锚点三层取并集保留；旧 `RetainedVersions` 直接兼容为最近版本，每小时/每日可独立设为 0。版本历史支持双击查看快照文件清单，展示文件名、所在目录、文件修改时间以及友好单位和精确字节大小。
 - 游戏存档支持按钮和双击编辑；修改单独备份目录会迁移、校验并在保存失败时回滚，其他字段修改只重启对应监听。
 - 设置保存会先提交线路表格编辑、验证新备份目录可写，再原子写入并反序列化复核配置；默认目录改变时迁移已有隐式备份，没有可迁移数据或开机自启登记失败都会给出明确反馈。
 - “浏览”选择默认备份目录后会弹出迁移确认并立即复用设置保存链路；单实例协调器继续使用 `Local\PathEcho.SingleInstance` 兼容旧版，同时由专用线程持有 Mutex，第二实例只发送激活信号，不再错误释放锁。
 
 ## 当前待办
 
-- 当前无已授权但未完成的发布任务；等待用户后续需求。
+- 自动备份通知、三层快照保留和版本文件清单已在本地实现；用户已授权更新并发布 `v0.5.0`，待完成发布门禁、提交、推送、标签、Actions 和线上核验。
 - `v0.4.0` 已公开，不得覆盖同版本资产；后续修复必须递增版本并保留现有标签和 Release 审计记录。
 - `v0.3.0` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.1` 一次；旧客户端无法通过新包修复自身正在执行的旧更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
@@ -93,6 +95,27 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-08-26 `v0.5.0` 发布候选门禁实际通过：
+
+- `dotnet format PathEcho.sln --verify-no-changes`、`dotnet build PathEcho.sln -c Release`、`dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build` 和 `git diff --check` 均通过；Release 构建 0 警告、0 错误，SmokeTests 39/39 通过。
+- 最终本地 Lite 候选 `temp/preview-v0.5.0/PathEcho-0.5.0-Lite.zip` 为 599940 字节，SHA-256 `48AAB002AEA5BB2A158C60367F0B165ADB48D6CDE24C5D630FE29FB4EEAEB59C`；候选包内更新器对 `0.5.0 / Lite` 的哈希、版本、通道和结构预检返回 0。
+- 从 GitHub `v0.4.0` Release 重新下载的原始 Lite ZIP 为 562547 字节，SHA-256 `C14A3D96F90E395A029A2307B704B462A5060B7544A228CB966BECBA461C2975`；其包内旧更新器接受 `v0.5.0` Lite 候选，退出码为 0。正式签名清单尚未生成，旧主程序获取线上清单的完整链路需在 Release 后验证。
+- 最终候选包真实 WPF 文件清单截图 `temp/ui/v0.5.0-packaged-snapshot-files.png` 为 33584 字节，SHA-256 `1A2948D75033914E60667211F6C187C716DA299F34324A968C3C1016B77473E3`；已人工核验搜索栏、文件名、目录、修改时间、友好大小、精确字节和关闭按钮无重叠、截断或低对比文本。
+
+2026-08-26 三层快照保留与版本文件清单本地候选实际通过：
+
+- `dotnet build PathEcho.sln -c Release`：0 警告、0 错误；`dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：39/39 通过；`dotnet format PathEcho.sln --verify-no-changes` 与 `git diff --check` 通过。
+- 新增回归覆盖最近版本、每小时锚点、每日锚点的并集与去重、无效策略拒绝、新字段配置重载，以及版本历史双击和文件名/修改时间/大小列契约。现有快照实际清理和对象回收测试继续通过。
+- 三层设置真实 WPF 截图 `temp/ui/tiered-retention-editor.png`：51598 字节，SHA-256 `11EBAAB6599E54CA875A4767E9287E9CA7D3473D698EFEF2B8FCB689D37B7057`。Lite 候选包内文件清单截图 `temp/ui/packaged-snapshot-files-final.png`：33600 字节，SHA-256 `79E9B7CC520EFF0D7D999D1472C1DB18F273424E78C45818880AE61A2FB18BA1`；搜索、文件名、目录、修改时间、友好单位和精确字节大小均无重叠或截断。
+- 本地 Lite 候选包 `temp/preview-tiered-retention/PathEcho-0.4.0-Lite.zip`：599924 字节，SHA-256 `10F6284A8878D912571B2B0AF1BCA3D1785E77F95B44723C62C0A51FAF7204FC`；包内更新器 `--verify-only` 对版本、Lite 通道、哈希和结构验证返回 0。本地候选沿用当前版本号，仅供验收，不是正式 Release。
+
+2026-08-26 自动备份通知本地候选实际通过：
+
+- `dotnet build PathEcho.sln -c Release`：0 警告、0 错误；`dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release`：38/38 通过；`dotnet format PathEcho.sln --verify-no-changes` 与 `git diff --check` 通过。
+- 新增回归覆盖配置原子保存与旧配置默认值、全局启用/关闭、游戏继承/关闭/自定义、游戏自定义不受全局关闭影响、四角微调和工作区边界限制，以及全局/游戏设置的未保存检测。
+- 真实 WPF 截图：设置页 `temp/ui/backup-notification-settings.png`（92980 字节，SHA-256 `83120106640A5877888EFEA24EB0D6D42D33855C538997A60C9E0212B8568A46`）；深色成功与浅色失败通知分别为 `temp/ui/notification-dark-success.png` 和 `temp/ui/notification-light-failure.png`；Lite 候选包内游戏自定义展开态 `temp/ui/packaged-game-notification-custom.png`（60894 字节，SHA-256 `366AE6B38227BD0B14A60065390D217628D51E77A07AF1D663AE55F98A644D0B`）及浅色失败态 `temp/ui/packaged-notification-light-failure.png`（10824 字节，SHA-256 `63A7EFC28A6D8D85E59FA19DAD91868081D9694CDA5684E52AA9B0F52FF166FE`）均无重叠、截断或低对比文本。
+- 本地 Lite 候选包 `temp/preview-backup-notifications/PathEcho-0.4.0-Lite.zip`：589905 字节，SHA-256 `F54928B34BF95BCBED59C1B8263CA41555415A1B42D8E9F467F7B497FBC1FFF4`；包内更新器 `--verify-only` 对版本、Lite 通道、哈希和结构验证返回 0。本地候选沿用当前版本号，仅供验收，不是正式 Release。
 
 2026-08-26 本地候选实际通过：
 

@@ -14,6 +14,10 @@ public sealed record AppConfiguration
 
     public bool EnableDebugLogging { get; init; }
 
+    public bool AutomaticBackupNotificationsEnabled { get; init; } = true;
+
+    public BackupNotificationSettings DefaultBackupNotification { get; init; } = new();
+
     public UpdateNetworkOptions UpdateNetwork { get; init; } = new();
 
     public string DefaultBackupDirectory { get; init; } = Path.Combine(
