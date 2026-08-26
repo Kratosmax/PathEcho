@@ -1,4 +1,5 @@
 using PathEcho.Core.Models;
+using PathEcho.Core.IO;
 
 namespace PathEcho.Core.Sync;
 
@@ -12,6 +13,24 @@ public sealed class SyncEngine
     public SyncEngine(string deletionVaultRoot)
     {
         _deletionVault = new DeletionVault(deletionVaultRoot);
+    }
+
+    public void InvalidatePaths(SyncTaskDefinition task, IEnumerable<string> changedPaths)
+    {
+        var leftRoot = SyncTaskDefinition.NormalizeRoot(task.LeftPath);
+        var rightRoot = SyncTaskDefinition.NormalizeRoot(task.RightPath);
+        foreach (var changedPath in changedPaths)
+        {
+            if (SafePath.TryGetRelativePath(leftRoot, changedPath, out _))
+            {
+                _scanner.InvalidatePath(leftRoot, changedPath);
+            }
+
+            if (SafePath.TryGetRelativePath(rightRoot, changedPath, out _))
+            {
+                _scanner.InvalidatePath(rightRoot, changedPath);
+            }
+        }
     }
 
     public Task<SyncRunResult> RunAsync(
@@ -43,9 +62,12 @@ public sealed class SyncEngine
             var left = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false);
             var right = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false);
             var plan = _planner.CreatePlan(task, left, right, baseline);
+            var finalLeft = new Dictionary<string, FileStamp>(left, StringComparer.OrdinalIgnoreCase);
+            var finalRight = new Dictionary<string, FileStamp>(right, StringComparer.OrdinalIgnoreCase);
             var copied = 0;
             var deleted = 0;
             var conflicts = 0;
+            var requiresFinalScan = false;
 
             foreach (var action in plan.Actions)
             {
@@ -56,29 +78,50 @@ public sealed class SyncEngine
                 {
                     case SyncActionKind.CopyLeftToRight:
                         await AtomicFileOperations.CopyAsync(leftPath, rightPath, cancellationToken).ConfigureAwait(false);
+                        var rightStamp = await FileStamp.CreateAsync(rightPath, cancellationToken).ConfigureAwait(false);
+                        finalRight[action.RelativePath] = rightStamp;
+                        _scanner.SetCachedPath(rightRoot, action.RelativePath, rightStamp);
                         copied++;
                         break;
                     case SyncActionKind.CopyRightToLeft:
                         await AtomicFileOperations.CopyAsync(rightPath, leftPath, cancellationToken).ConfigureAwait(false);
+                        var leftStamp = await FileStamp.CreateAsync(leftPath, cancellationToken).ConfigureAwait(false);
+                        finalLeft[action.RelativePath] = leftStamp;
+                        _scanner.SetCachedPath(leftRoot, action.RelativePath, leftStamp);
                         copied++;
                         break;
                     case SyncActionKind.DeleteLeft:
                         await DeleteAsync(task, action.RelativePath, leftPath, cancellationToken).ConfigureAwait(false);
+                        _scanner.InvalidatePath(leftRoot, leftPath);
+                        finalLeft.Remove(action.RelativePath);
                         deleted++;
                         break;
                     case SyncActionKind.DeleteRight:
                         await DeleteAsync(task, action.RelativePath, rightPath, cancellationToken).ConfigureAwait(false);
+                        _scanner.InvalidatePath(rightRoot, rightPath);
+                        finalRight.Remove(action.RelativePath);
                         deleted++;
                         break;
                     case SyncActionKind.KeepBothConflict:
                         await PreserveConflictAsync(action.RelativePath, leftPath, rightPath, cancellationToken).ConfigureAwait(false);
+                        _scanner.Invalidate(leftRoot);
+                        _scanner.Invalidate(rightRoot);
+                        requiresFinalScan = true;
                         conflicts++;
                         break;
                 }
             }
 
-            var finalLeft = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false);
-            var finalRight = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false);
+            if (requiresFinalScan)
+            {
+                finalLeft = new Dictionary<string, FileStamp>(
+                    await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false),
+                    StringComparer.OrdinalIgnoreCase);
+                finalRight = new Dictionary<string, FileStamp>(
+                    await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false),
+                    StringComparer.OrdinalIgnoreCase);
+            }
+
             var keys = finalLeft.Keys.Concat(finalRight.Keys).Distinct(StringComparer.OrdinalIgnoreCase);
             var entries = keys.ToDictionary(
                 key => key,
@@ -163,13 +206,6 @@ public sealed class SyncEngine
 
     private static string SafeCombine(string root, string relative)
     {
-        var combined = Path.GetFullPath(Path.Combine(root, relative));
-        var expectedPrefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
-        if (!combined.StartsWith(expectedPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("文件路径超出同步目录。");
-        }
-
-        return combined;
+        return SafePath.CombineUnderRoot(root, relative, "文件路径超出同步目录。");
     }
 }

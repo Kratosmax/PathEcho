@@ -23,11 +23,15 @@ var tests = new (string Name, Func<Task> Run)[]
     ("配置可原子保存并读取", TestConfigurationStoreAsync),
     ("单向同步可复制并在删除前备份", TestOneWaySyncAsync),
     ("双向冲突默认保留两份", TestBidirectionalConflictAsync),
+    ("同大小同时间戳变化在监听失效后仍可同步", TestSameStampInvalidationAsync),
+    ("忽略删除优先于双向冲突策略", TestIgnoreDeletionConflictAsync),
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
+    ("增量快照可记录改名删除并兼容旧版本", TestIncrementalAndLegacySnapshotAsync),
     ("备份失败会完整暂存并恢复写入", TestBackupRetryRecoveryAsync),
     ("备份重试每批询问且停止时保留完整副本", TestBackupRetryPromptAsync),
     ("备份重试可取消且清理失败不重复快照", TestBackupRetryCancellationAndPruneAsync),
     ("目录变化可合并触发自动同步", TestSyncMonitorAsync),
+    ("同步监听溢出标记不会被普通事件覆盖", TestSyncMonitorOverflowAsync),
     ("同一任务并发同步会串行更新基线", TestSyncTaskRunnerSerializationAsync),
     ("同步过滤与预演共用规划且不修改目录", TestSyncFiltersAndPreviewAsync),
     ("同步运行历史有上限并原子持久化", TestSyncRunHistoryStoreAsync),
@@ -42,6 +46,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("更新器离开安装目录后可移动整个目录", TestUpdaterWorkingDirectoryAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
+    ("游戏监听溢出后执行全量备份", TestGameBackupMonitorOverflowAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
     ("Restart Manager 可识别占用且保护当前进程", TestRestartManagerAsync),
     ("备份目录可迁移、发现并导入", TestBackupDirectoryManagerAsync),
@@ -205,6 +210,62 @@ async Task TestBidirectionalConflictAsync()
     True(Directory.EnumerateFiles(right, "*.conflict-left-*", SearchOption.TopDirectoryOnly).Any(), "右侧缺少左侧冲突副本。");
 }
 
+async Task TestSameStampInvalidationAsync()
+{
+    var root = Path.Combine(testRoot, "same-stamp");
+    var left = Path.Combine(root, "left");
+    var right = Path.Combine(root, "right");
+    Directory.CreateDirectory(left);
+    Directory.CreateDirectory(right);
+    var leftFile = Path.Combine(left, "slot.sav");
+    await File.WriteAllTextAsync(leftFile, "AAAA");
+    var task = new SyncTaskDefinition { Name = "同时间戳", LeftPath = left, RightPath = right };
+    var engine = new SyncEngine(Path.Combine(root, "vault"));
+    var initial = await engine.RunAsync(task, SyncBaseline.Empty);
+    var timestamp = File.GetLastWriteTimeUtc(leftFile);
+
+    await File.WriteAllTextAsync(leftFile, "BBBB");
+    File.SetLastWriteTimeUtc(leftFile, timestamp);
+    engine.InvalidatePaths(task, new[] { leftFile });
+    await engine.RunAsync(task, initial.Baseline);
+
+    Equal("BBBB", await File.ReadAllTextAsync(Path.Combine(right, "slot.sav")), "相同大小和时间戳的内容变化被缓存漏掉。");
+}
+
+async Task TestIgnoreDeletionConflictAsync()
+{
+    foreach (var policy in new[] { ConflictPolicy.PreferLeft, ConflictPolicy.PreferRight })
+    {
+        var root = Path.Combine(testRoot, "ignore-deletion", policy.ToString());
+        var left = Path.Combine(root, "left");
+        var right = Path.Combine(root, "right");
+        Directory.CreateDirectory(left);
+        Directory.CreateDirectory(right);
+        var leftFile = Path.Combine(left, "slot.sav");
+        var rightFile = Path.Combine(right, "slot.sav");
+        await File.WriteAllTextAsync(leftFile, "base");
+        await File.WriteAllTextAsync(rightFile, "base");
+        var task = new SyncTaskDefinition
+        {
+            Name = "忽略删除",
+            LeftPath = left,
+            RightPath = right,
+            Mode = SyncMode.Bidirectional,
+            DeletionMode = DeletionMode.Ignore,
+            ConflictPolicy = policy,
+        };
+        var engine = new SyncEngine(Path.Combine(root, "vault"));
+        var initial = await engine.RunAsync(task, SyncBaseline.Empty);
+        File.Delete(leftFile);
+        await File.WriteAllTextAsync(rightFile, "live");
+        engine.InvalidatePaths(task, new[] { leftFile, rightFile });
+
+        var result = await engine.RunAsync(task, initial.Baseline);
+        Equal(0, result.DeletedFiles, $"{policy} 在忽略删除模式下仍生成删除动作。");
+        Equal("live", await File.ReadAllTextAsync(leftFile), $"{policy} 没有恢复现存文件。");
+    }
+}
+
 async Task TestSnapshotStoreAsync()
 {
     var root = Path.Combine(testRoot, "snapshot");
@@ -219,8 +280,17 @@ async Task TestSnapshotStoreAsync()
     var first = await store.CreateAsync(profileId, source, backup, "测试");
     Equal(2, first.FileCount, "快照文件数量不正确。");
     Equal(1, first.NewObjectCount, "相同内容没有在首个快照内去重。");
-    True(File.Exists(Path.Combine(first.SnapshotDirectory, "files", "first.sav")), "普通目录快照视图不存在。");
+    False(Directory.Exists(Path.Combine(first.SnapshotDirectory, "files")), "新快照仍创建会串改历史的硬链接视图。");
     True(File.Exists(Path.Combine(first.SnapshotDirectory, "manifest.json")), "快照清单不存在。");
+    var browse = Path.Combine(root, "browse");
+    await SnapshotContent.MaterializeBrowseCopyAsync(first.SnapshotDirectory, browse);
+    Equal("duplicate-content", await File.ReadAllTextAsync(Path.Combine(browse, "first.sav")), "独立浏览副本内容不正确。");
+    await File.WriteAllTextAsync(Path.Combine(browse, "first.sav"), "modified-copy");
+    var firstManifest = await SnapshotContent.ReadManifestAsync(first.SnapshotDirectory);
+    Equal(
+        "duplicate-content",
+        await File.ReadAllTextAsync(SnapshotContent.ResolveFile(first.SnapshotDirectory, firstManifest.Files[0])),
+        "修改浏览副本影响了历史对象。");
 
     var second = await store.CreateAsync(profileId, source, backup, "测试");
     Equal(0, second.NewObjectCount, "未复用已有内容对象。");
@@ -229,6 +299,113 @@ async Task TestSnapshotStoreAsync()
     Equal(1, removed, "旧快照未按版本数清理。");
     Equal(1, Directory.EnumerateDirectories(Path.Combine(backup, profileId.ToString("N"), "snapshots")).Count(), "保留快照数量不正确。");
     Equal(1, Directory.EnumerateFiles(Path.Combine(backup, profileId.ToString("N"), "objects"), "*.blob", SearchOption.AllDirectories).Count(), "去重对象清理不正确。");
+}
+
+async Task TestIncrementalAndLegacySnapshotAsync()
+{
+    var root = Path.Combine(testRoot, "incremental-snapshot");
+    var source = Path.Combine(root, "source");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(source);
+    await File.WriteAllTextAsync(Path.Combine(source, "a.sav"), "a1");
+    await File.WriteAllTextAsync(Path.Combine(source, "b.sav"), "b1");
+    var profileId = Guid.NewGuid();
+    var store = new SnapshotStore();
+    var first = await store.CreateAsync(profileId, source, backup, "完整");
+
+    File.Move(Path.Combine(source, "a.sav"), Path.Combine(source, "renamed.sav"));
+    File.Delete(Path.Combine(source, "b.sav"));
+    await File.WriteAllTextAsync(Path.Combine(source, "new.sav"), "new");
+    var second = await store.CreateAsync(
+        profileId,
+        source,
+        backup,
+        "变化",
+        changedPaths: new[] { "a.sav", "renamed.sav", "b.sav", "new.sav" });
+    var firstManifest = await SnapshotContent.ReadManifestAsync(first.SnapshotDirectory);
+    var secondManifest = await SnapshotContent.ReadManifestAsync(second.SnapshotDirectory);
+    Equal("a.sav,b.sav", string.Join(',', firstManifest.Files.Select(file => file.RelativePath)), "首个完整清单被增量快照修改。");
+    Equal("new.sav,renamed.sav", string.Join(',', secondManifest.Files.Select(file => file.RelativePath)), "增量清单没有正确记录改名、删除和新增。");
+
+    var legacyProfileId = Guid.NewGuid();
+    var legacyProfile = Path.Combine(backup, legacyProfileId.ToString("N"));
+    var legacySnapshot = Path.Combine(legacyProfile, "snapshots", "legacy");
+    var legacyFiles = Path.Combine(legacySnapshot, "files");
+    Directory.CreateDirectory(legacyFiles);
+    var legacyPath = Path.Combine(legacyFiles, "slot.sav");
+    await File.WriteAllTextAsync(legacyPath, "legacy");
+    var legacyHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(legacyPath)));
+    var legacyManifest = new SnapshotManifest
+    {
+        SchemaVersion = 1,
+        ProfileId = legacyProfileId,
+        CreatedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1),
+        Trigger = "旧版",
+        Files = new[]
+        {
+            new SnapshotFileEntry
+            {
+                RelativePath = "slot.sav",
+                Sha256 = legacyHash,
+                Length = new FileInfo(legacyPath).Length,
+                LastWriteUtcTicks = File.GetLastWriteTimeUtc(legacyPath).Ticks,
+            },
+        },
+    };
+    Directory.CreateDirectory(legacySnapshot);
+    await File.WriteAllTextAsync(Path.Combine(legacySnapshot, "manifest.json"), JsonSerializer.Serialize(legacyManifest));
+    var legacySource = Path.Combine(root, "legacy-source");
+    Directory.CreateDirectory(legacySource);
+    await File.WriteAllTextAsync(Path.Combine(legacySource, "slot.sav"), "legacy");
+
+    await store.CreateAsync(legacyProfileId, legacySource, backup, "升级");
+    False(Directory.Exists(legacyFiles), "对象逐项验真后仍保留旧硬链接视图。");
+    Equal(2, (await SnapshotContent.ReadManifestAsync(legacySnapshot)).SchemaVersion, "安全迁移后旧清单未升级。");
+    var restoreTarget = Path.Combine(root, "legacy-restore");
+    await new SnapshotRestoreService(new EmptyOccupancyService()).RestoreAsync(new RestoreRequest
+    {
+        SnapshotDirectory = legacySnapshot,
+        TargetDirectory = restoreTarget,
+        Mode = RestoreMode.CleanDirectory,
+    });
+    Equal("legacy", await File.ReadAllTextAsync(Path.Combine(restoreTarget, "slot.sav")), "升级后的旧快照无法回档。");
+
+    var damagedProfileId = Guid.NewGuid();
+    var damagedSnapshot = Path.Combine(backup, damagedProfileId.ToString("N"), "snapshots", "damaged-object");
+    var damagedFiles = Path.Combine(damagedSnapshot, "files");
+    Directory.CreateDirectory(damagedFiles);
+    var fallbackPath = Path.Combine(damagedFiles, "slot.sav");
+    await File.WriteAllTextAsync(fallbackPath, "fallback");
+    var fallbackHash = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(fallbackPath)));
+    var damagedEntry = new SnapshotFileEntry
+    {
+        RelativePath = "slot.sav",
+        Sha256 = fallbackHash,
+        Length = new FileInfo(fallbackPath).Length,
+        LastWriteUtcTicks = File.GetLastWriteTimeUtc(fallbackPath).Ticks,
+    };
+    var damagedManifest = new SnapshotManifest
+    {
+        SchemaVersion = 1,
+        ProfileId = damagedProfileId,
+        CreatedAtUtc = DateTimeOffset.UtcNow,
+        Trigger = "损坏对象兜底",
+        Files = new[] { damagedEntry },
+    };
+    await File.WriteAllTextAsync(Path.Combine(damagedSnapshot, "manifest.json"), JsonSerializer.Serialize(damagedManifest));
+    var damagedObject = SnapshotContent.GetObjectPath(
+        Path.Combine(backup, damagedProfileId.ToString("N")),
+        fallbackHash);
+    Directory.CreateDirectory(Path.GetDirectoryName(damagedObject)!);
+    await File.WriteAllTextAsync(damagedObject, "corrupted");
+    var fallbackRestore = Path.Combine(root, "fallback-restore");
+    await new SnapshotRestoreService(new EmptyOccupancyService()).RestoreAsync(new RestoreRequest
+    {
+        SnapshotDirectory = damagedSnapshot,
+        TargetDirectory = fallbackRestore,
+        Mode = RestoreMode.CleanDirectory,
+    });
+    Equal("fallback", await File.ReadAllTextAsync(Path.Combine(fallbackRestore, "slot.sav")), "损坏对象存在时没有回退到有效旧视图。");
 }
 
 async Task TestBackupRetryRecoveryAsync()
@@ -254,7 +431,9 @@ async Task TestBackupRetryRecoveryAsync()
     True(result is not null, "重试后没有创建快照。");
     Equal(3, stagingStore.CreateAttempts, "源存档读取失败后没有持续重试。");
     Equal(2, result!.FileCount, "暂存副本没有包含全部文件。");
-    True(File.Exists(Path.Combine(result.SnapshotDirectory, "files", "nested", "profile.dat")), "嵌套存档未从暂存副本写入正式备份。");
+    var retryManifest = await SnapshotContent.ReadManifestAsync(result.SnapshotDirectory);
+    var nestedEntry = retryManifest.Files.Single(file => file.RelativePath == Path.Combine("nested", "profile.dat"));
+    Equal("profile", await File.ReadAllTextAsync(SnapshotContent.ResolveFile(result.SnapshotDirectory, nestedEntry)), "嵌套存档未从暂存副本写入正式备份。");
     var profileTemp = Path.Combine(backup, "temp", profile.Id.ToString("N"));
     True(!Directory.Exists(profileTemp) || !Directory.EnumerateDirectories(profileTemp).Any(), "成功后没有清理本次临时副本。");
 }
@@ -378,6 +557,40 @@ async Task TestSyncMonitorAsync()
 
     Equal("observed", await File.ReadAllTextAsync(Path.Combine(right, "watched.sav")), "监听变化未同步到目标目录。");
     True(File.Exists(Path.Combine(root, "baselines", $"{task.Id:N}.json")), "监听同步后未持久化基线。");
+}
+
+async Task TestSyncMonitorOverflowAsync()
+{
+    var root = Path.Combine(testRoot, "monitor-overflow");
+    var left = Path.Combine(root, "left");
+    var right = Path.Combine(root, "right");
+    Directory.CreateDirectory(left);
+    Directory.CreateDirectory(right);
+    var task = new SyncTaskDefinition { Name = "溢出测试", LeftPath = left, RightPath = right };
+    var runCount = 0;
+    var overflowRun = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var runner = new SyncTaskRunner(
+        (_, _) => Task.FromResult(SyncBaseline.Empty),
+        (_, _, _) => Task.CompletedTask,
+        (_, _, forceFullScan, _) =>
+        {
+            if (Interlocked.Increment(ref runCount) > 1)
+            {
+                overflowRun.TrySetResult(forceFullScan);
+            }
+
+            return Task.FromResult(new SyncRunResult(0, 0, 0, SyncBaseline.Empty));
+        });
+    await using var monitor = new SyncTaskMonitor(task, runner, TimeSpan.FromMilliseconds(100));
+    await monitor.StartAsync();
+    var onError = typeof(SyncTaskMonitor).GetMethod(
+        "OnError",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("无法定位同步监听溢出处理器。");
+    onError.Invoke(monitor, new object[] { monitor, new ErrorEventArgs(new InternalBufferOverflowException()) });
+    await File.WriteAllTextAsync(Path.Combine(left, "after-overflow.sav"), "event");
+
+    True(await overflowRun.Task.WaitAsync(TimeSpan.FromSeconds(10)), "overflow 的全量扫描标记被后续普通事件覆盖。");
 }
 
 async Task TestSyncTaskRunnerSerializationAsync()
@@ -815,11 +1028,60 @@ async Task TestGameBackupMonitorAsync()
         ImportantFilePatterns = new[] { @"\.sav$" },
         MinimumBackupInterval = TimeSpan.FromHours(1),
     };
-    var importantService = new GameBackupService(importantProfile, backup);
+    var importantStore = new RecordingSnapshotStore();
+    var importantService = new GameBackupService(importantProfile, backup, importantStore);
     var first = await importantService.CreateAsync(BackupTrigger.ImportantFileChanged);
     var throttled = await importantService.CreateAsync(BackupTrigger.ImportantFileChanged);
     True(first is not null, "首次重点文件备份被错误跳过。");
     True(throttled is null, "重点文件最低备份间隔未生效。");
+
+    var importantMonitorProfile = importantProfile with
+    {
+        Id = Guid.NewGuid(),
+        MinimumBackupInterval = TimeSpan.Zero,
+    };
+    var importantMonitorStore = new RecordingSnapshotStore();
+    await using (var importantMonitor = new GameBackupMonitor(
+                     importantMonitorProfile,
+                     new GameBackupService(importantMonitorProfile, backup, importantMonitorStore)))
+    {
+        var importantCreated = new TaskCompletionSource<SnapshotCreationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        importantMonitor.BackupCreated += (_, result) => importantCreated.TrySetResult(result);
+        importantMonitor.Start();
+        await File.WriteAllTextAsync(Path.Combine(save, "important.sav"), "whole-directory");
+        await importantCreated.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    }
+
+    True(importantMonitorStore.LastChangedPaths is null, "重点文件变动没有按整目录备份。");
+}
+
+async Task TestGameBackupMonitorOverflowAsync()
+{
+    var root = Path.Combine(testRoot, "game-monitor-overflow");
+    var save = Path.Combine(root, "save");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(save);
+    var profile = new GameBackupProfile
+    {
+        Name = "游戏监听溢出",
+        SaveDirectory = save,
+        Triggers = BackupTrigger.ChangedFiles,
+    };
+    var store = new RecordingSnapshotStore();
+    var service = new GameBackupService(profile, backup, store);
+    await using var monitor = new GameBackupMonitor(profile, service);
+    var created = new TaskCompletionSource<SnapshotCreationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+    monitor.BackupCreated += (_, result) => created.TrySetResult(result);
+    monitor.Start();
+    var onError = typeof(GameBackupMonitor).GetMethod(
+        "OnWatcherError",
+        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("无法定位游戏监听溢出处理器。");
+    onError.Invoke(monitor, new object[] { monitor, new ErrorEventArgs(new InternalBufferOverflowException()) });
+    await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "full-snapshot");
+
+    await created.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    True(store.LastChangedPaths is null, "游戏监听 overflow 后仍错误执行路径级增量备份。");
 }
 
 async Task TestSnapshotRestoreAsync()
@@ -910,10 +1172,18 @@ async Task TestBackupDirectoryManagerAsync()
     False(Directory.Exists(Path.Combine(oldBackup, profileId.ToString("N"))), "迁移成功后旧目录仍保留游戏备份。");
     True(Directory.Exists(Path.Combine(newBackup, profileId.ToString("N"))), "迁移后新目录缺少游戏备份。");
 
+    var duplicateBackup = Path.Combine(root, "duplicate");
+    await new SnapshotStore().CreateAsync(profileId, save, duplicateBackup, "同 ID 独立根");
+    var discoveredTogether = await manager.DiscoverAsync(root);
+    Equal(2, discoveredTogether.Count(item => item.ProfileId == profileId), "同一 ProfileId 的不同备份根被错误合并。");
+
     var discovered = await manager.DiscoverAsync(newBackup);
     Equal(1, discovered.Count, "未发现已迁移的备份。");
     var imported = await manager.ImportAsync(discovered[0], importedBackup);
     True(Directory.Exists(imported.ProfileDirectory), "发现的备份未导入目标目录。");
+    Equal(1, Directory.EnumerateFiles(Path.Combine(imported.ProfileDirectory, "objects"), "*.blob", SearchOption.AllDirectories).Count(), "导入时没有按内容只复制一次唯一对象。");
+    False(Directory.EnumerateDirectories(Path.Combine(imported.ProfileDirectory, "snapshots"))
+        .Any(snapshot => Directory.Exists(Path.Combine(snapshot, "files"))), "结构化导入仍复制旧普通目录视图。");
     Equal(1, (await manager.DiscoverAsync(importedBackup)).Count, "导入后的备份无法再次发现。");
 }
 
@@ -1200,6 +1470,8 @@ Task TestGameHistoryAndEditingContractAsync()
     True(windowXaml.Contains("MouseDoubleClick=\"OnGameRowDoubleClick\"", StringComparison.Ordinal), "游戏表格没有双击编辑入口。");
     True(windowCode.Contains("row.Profile.Id != selectedProfileId", StringComparison.Ordinal), "历史筛选没有按游戏 ID 区分同名游戏。");
     True(windowCode.Contains("QueueHistoryRefresh", StringComparison.Ordinal), "大量历史记录刷新没有合并 UI 更新。");
+    True(windowCode.Contains("PrepareSnapshotBrowseAsync(row)", StringComparison.Ordinal), "打开历史版本没有生成独立浏览副本。");
+    False(windowCode.Contains("Path.Combine(row.SnapshotDirectory, \"files\")", StringComparison.Ordinal), "界面仍直接打开可串改历史的旧 files 目录。");
     True(editorCode.Contains("updated with { Id = _existingProfile.Id", StringComparison.Ordinal), "编辑游戏时没有保留原配置 ID。");
     True(runtimeCode.Contains("manager.MoveProfileAsync", StringComparison.Ordinal), "编辑单独备份目录时没有迁移现有备份。");
     return Task.CompletedTask;
@@ -1325,7 +1597,8 @@ sealed class FaultInjectingSnapshotStore(int createFailures = 0, int pruneFailur
         string sourceDirectory,
         string backupDirectory,
         string trigger,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? changedPaths = null)
     {
         CreateAttempts++;
         if (CreateAttempts <= createFailures)
@@ -1333,7 +1606,13 @@ sealed class FaultInjectingSnapshotStore(int createFailures = 0, int pruneFailur
             throw new IOException($"模拟写入失败 {CreateAttempts}");
         }
 
-        return _inner.CreateAsync(profileId, sourceDirectory, backupDirectory, trigger, cancellationToken);
+        return _inner.CreateAsync(
+            profileId,
+            sourceDirectory,
+            backupDirectory,
+            trigger,
+            cancellationToken,
+            changedPaths);
     }
 
     public Task<int> PruneAsync(
@@ -1350,6 +1629,38 @@ sealed class FaultInjectingSnapshotStore(int createFailures = 0, int pruneFailur
 
         return _inner.PruneAsync(profileId, backupDirectory, retainedVersions, cancellationToken);
     }
+}
+
+sealed class RecordingSnapshotStore : IBackupSnapshotStore
+{
+    private readonly SnapshotStore _inner = new();
+
+    public IReadOnlyCollection<string>? LastChangedPaths { get; private set; }
+
+    public Task<SnapshotCreationResult> CreateAsync(
+        Guid profileId,
+        string sourceDirectory,
+        string backupDirectory,
+        string trigger,
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? changedPaths = null)
+    {
+        LastChangedPaths = changedPaths;
+        return _inner.CreateAsync(
+            profileId,
+            sourceDirectory,
+            backupDirectory,
+            trigger,
+            cancellationToken,
+            changedPaths);
+    }
+
+    public Task<int> PruneAsync(
+        Guid profileId,
+        string backupDirectory,
+        int retainedVersions,
+        CancellationToken cancellationToken = default) =>
+        _inner.PruneAsync(profileId, backupDirectory, retainedVersions, cancellationToken);
 }
 
 sealed class FaultInjectingStagingStore(int createFailures) : IBackupStagingStore

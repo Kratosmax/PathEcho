@@ -1,15 +1,12 @@
-using System.Security.Cryptography;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 using PathEcho.Core.Backup;
+using PathEcho.Core.IO;
 using PathEcho.Core.Sync;
 
 namespace PathEcho.Core.Restore;
 
 public sealed class SnapshotRestoreService
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new();
-
     private readonly IFileOccupancyService _occupancyService;
 
     public SnapshotRestoreService(IFileOccupancyService occupancyService)
@@ -21,22 +18,21 @@ public sealed class SnapshotRestoreService
         RestoreRequest request,
         CancellationToken cancellationToken = default)
     {
-        var snapshotRoot = NormalizeRoot(request.SnapshotDirectory);
-        var targetRoot = NormalizeRoot(request.TargetDirectory);
-        var filesRoot = Path.Combine(snapshotRoot, "files");
-        var manifest = await ReadManifestAsync(snapshotRoot, cancellationToken).ConfigureAwait(false);
+        var snapshotRoot = SafePath.NormalizeDirectory(request.SnapshotDirectory, "快照目录不能为空。");
+        var targetRoot = SafePath.NormalizeDirectory(request.TargetDirectory, "目标目录不能为空。");
+        var manifest = await SnapshotContent.ReadManifestAsync(snapshotRoot, cancellationToken).ConfigureAwait(false);
         var include = CompilePatterns(request.IncludePatterns);
         var exclude = CompilePatterns(request.ExcludePatterns);
         var entries = await SelectEntriesAsync(
             manifest.Files,
-            filesRoot,
+            snapshotRoot,
             targetRoot,
             request.Mode,
             include,
             exclude,
             cancellationToken).ConfigureAwait(false);
 
-        var targetPaths = entries.Select(entry => SafeCombine(targetRoot, entry.RelativePath)).ToArray();
+        var targetPaths = entries.Select(entry => CombineUnderRoot(targetRoot, entry.RelativePath)).ToArray();
         if (request.Mode == RestoreMode.CleanDirectory && Directory.Exists(targetRoot))
         {
             targetPaths = Directory.EnumerateFiles(targetRoot, "*", SearchOption.AllDirectories)
@@ -47,8 +43,8 @@ public sealed class SnapshotRestoreService
 
         await HandleOccupiedFilesAsync(targetPaths, request.OccupiedFileAction, cancellationToken).ConfigureAwait(false);
         return request.Mode == RestoreMode.CleanDirectory
-            ? await RestoreWholeDirectoryAsync(entries, filesRoot, targetRoot, cancellationToken).ConfigureAwait(false)
-            : await RestoreSelectedFilesAsync(entries, filesRoot, targetRoot, cancellationToken).ConfigureAwait(false);
+            ? await RestoreWholeDirectoryAsync(entries, snapshotRoot, targetRoot, cancellationToken).ConfigureAwait(false)
+            : await RestoreSelectedFilesAsync(entries, snapshotRoot, targetRoot, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task HandleOccupiedFilesAsync(
@@ -85,7 +81,7 @@ public sealed class SnapshotRestoreService
 
     private static async Task<RestoreResult> RestoreWholeDirectoryAsync(
         IReadOnlyList<SnapshotFileEntry> entries,
-        string filesRoot,
+        string snapshotRoot,
         string targetRoot,
         CancellationToken cancellationToken)
     {
@@ -97,7 +93,7 @@ public sealed class SnapshotRestoreService
         var targetMoved = false;
         try
         {
-            await StageEntriesAsync(entries, filesRoot, stageRoot, cancellationToken).ConfigureAwait(false);
+            await StageEntriesAsync(entries, snapshotRoot, stageRoot, cancellationToken).ConfigureAwait(false);
             if (Directory.Exists(targetRoot))
             {
                 Directory.Move(targetRoot, rollbackRoot);
@@ -138,7 +134,7 @@ public sealed class SnapshotRestoreService
 
     private static async Task<RestoreResult> RestoreSelectedFilesAsync(
         IReadOnlyList<SnapshotFileEntry> entries,
-        string filesRoot,
+        string snapshotRoot,
         string targetRoot,
         CancellationToken cancellationToken)
     {
@@ -150,17 +146,17 @@ public sealed class SnapshotRestoreService
         var committed = new List<(string Target, string? Rollback)>();
         try
         {
-            await StageEntriesAsync(entries, filesRoot, stagedRoot, cancellationToken).ConfigureAwait(false);
+            await StageEntriesAsync(entries, snapshotRoot, stagedRoot, cancellationToken).ConfigureAwait(false);
             foreach (var entry in entries)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var target = SafeCombine(targetRoot, entry.RelativePath);
-                var staged = SafeCombine(stagedRoot, entry.RelativePath);
+                var target = CombineUnderRoot(targetRoot, entry.RelativePath);
+                var staged = CombineUnderRoot(stagedRoot, entry.RelativePath);
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 string? rollback = null;
                 if (File.Exists(target))
                 {
-                    rollback = SafeCombine(rollbackRoot, entry.RelativePath);
+                    rollback = CombineUnderRoot(rollbackRoot, entry.RelativePath);
                     Directory.CreateDirectory(Path.GetDirectoryName(rollback)!);
                     File.Move(target, rollback);
                 }
@@ -209,7 +205,7 @@ public sealed class SnapshotRestoreService
 
     private static async Task StageEntriesAsync(
         IReadOnlyList<SnapshotFileEntry> entries,
-        string filesRoot,
+        string snapshotRoot,
         string stageRoot,
         CancellationToken cancellationToken)
     {
@@ -217,11 +213,12 @@ public sealed class SnapshotRestoreService
         foreach (var entry in entries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var source = SafeCombine(filesRoot, entry.RelativePath);
-            var destination = SafeCombine(stageRoot, entry.RelativePath);
+            var source = await SnapshotContent.ResolveVerifiedFileAsync(snapshotRoot, entry, cancellationToken)
+                .ConfigureAwait(false);
+            var destination = CombineUnderRoot(stageRoot, entry.RelativePath);
             await AtomicFileOperations.CopyAsync(source, destination, cancellationToken).ConfigureAwait(false);
             File.SetAttributes(destination, FileAttributes.Normal);
-            var actualHash = await ComputeHashAsync(destination, cancellationToken).ConfigureAwait(false);
+            var actualHash = await ContentHash.ComputeAsync(destination, cancellationToken).ConfigureAwait(false);
             if (!string.Equals(actualHash, entry.Sha256, StringComparison.Ordinal))
             {
                 throw new InvalidDataException($"快照文件校验失败：{entry.RelativePath}");
@@ -233,7 +230,7 @@ public sealed class SnapshotRestoreService
 
     private static async Task<IReadOnlyList<SnapshotFileEntry>> SelectEntriesAsync(
         IReadOnlyList<SnapshotFileEntry> entries,
-        string filesRoot,
+        string snapshotRoot,
         string targetRoot,
         RestoreMode mode,
         IReadOnlyList<Regex> include,
@@ -257,19 +254,16 @@ public sealed class SnapshotRestoreService
 
             if (mode == RestoreMode.ChangedFiles)
             {
-                var target = SafeCombine(targetRoot, entry.RelativePath);
+                var target = CombineUnderRoot(targetRoot, entry.RelativePath);
                 if (File.Exists(target) &&
-                    string.Equals(await ComputeHashAsync(target, cancellationToken).ConfigureAwait(false), entry.Sha256, StringComparison.Ordinal))
+                    string.Equals(await ContentHash.ComputeAsync(target, cancellationToken).ConfigureAwait(false), entry.Sha256, StringComparison.Ordinal))
                 {
                     continue;
                 }
             }
 
-            var source = SafeCombine(filesRoot, entry.RelativePath);
-            if (!File.Exists(source))
-            {
-                throw new InvalidDataException($"快照缺少文件：{entry.RelativePath}");
-            }
+            _ = await SnapshotContent.ResolveVerifiedFileAsync(snapshotRoot, entry, cancellationToken)
+                .ConfigureAwait(false);
 
             selected.Add(entry);
         }
@@ -277,46 +271,13 @@ public sealed class SnapshotRestoreService
         return selected;
     }
 
-    private static async Task<SnapshotManifest> ReadManifestAsync(string snapshotRoot, CancellationToken cancellationToken)
-    {
-        var path = Path.Combine(snapshotRoot, "manifest.json");
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-        return await JsonSerializer.DeserializeAsync<SnapshotManifest>(stream, SerializerOptions, cancellationToken)
-            .ConfigureAwait(false) ?? throw new InvalidDataException("快照清单无效。");
-    }
-
     private static IReadOnlyList<Regex> CompilePatterns(IEnumerable<string> patterns) => patterns
         .Where(pattern => !string.IsNullOrWhiteSpace(pattern))
         .Select(pattern => new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
         .ToArray();
 
-    private static async Task<string> ComputeHashAsync(string path, CancellationToken cancellationToken)
-    {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
-        return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
-    }
-
-    private static string NormalizeRoot(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException("目录不能为空。");
-        }
-
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-    }
-
-    private static string SafeCombine(string root, string relativePath)
-    {
-        var combined = Path.GetFullPath(Path.Combine(root, relativePath));
-        var prefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
-        if (!combined.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException("恢复文件路径超出目标目录。");
-        }
-
-        return combined;
-    }
+    private static string CombineUnderRoot(string root, string relativePath) =>
+        SafePath.CombineUnderRoot(root, relativePath, "恢复文件路径超出目标目录。");
 
     private static void DeleteTree(string path)
     {

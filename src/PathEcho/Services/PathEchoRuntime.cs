@@ -418,6 +418,24 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         return await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<string> PrepareSnapshotBrowseAsync(
+        HistoryRow history,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureNotPreview("预览模式不会读取真实备份文件。");
+        var destination = Path.Combine(
+            _dataRoot,
+            "temp",
+            "browse",
+            history.Profile.Id.ToString("N"),
+            Path.GetFileName(history.SnapshotDirectory));
+        await SnapshotContent.MaterializeBrowseCopyAsync(
+            history.SnapshotDirectory,
+            destination,
+            cancellationToken).ConfigureAwait(false);
+        return destination;
+    }
+
     public async Task<SettingsSaveResult> SaveSettingsAsync(
         bool startWithWindows,
         bool startMinimized,

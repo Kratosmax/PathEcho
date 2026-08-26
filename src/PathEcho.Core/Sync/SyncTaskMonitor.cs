@@ -9,14 +9,17 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
     private readonly SyncTaskDefinition _task;
     private readonly SyncTaskRunner _runner;
     private readonly TimeSpan _debounce;
-    private readonly Channel<bool> _signals = Channel.CreateBounded<bool>(new BoundedChannelOptions(1)
+    private readonly Channel<byte> _signals = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
-        FullMode = BoundedChannelFullMode.DropOldest,
+        FullMode = BoundedChannelFullMode.DropWrite,
         SingleReader = true,
         SingleWriter = false,
     });
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<FileSystemWatcher> _watchers = new();
+    private readonly object _changesGate = new();
+    private readonly HashSet<string> _changedPaths = new(StringComparer.OrdinalIgnoreCase);
+    private int _requiresFullScan;
     private Task? _worker;
 
     public SyncTaskMonitor(
@@ -50,8 +53,6 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
         }
 
         _task.Validate();
-        var initial = await _runner.RunAsync(_task, true, cancellationToken).ConfigureAwait(false);
-
         foreach (var root in GetWatchedRoots())
         {
             var watcher = CreateWatcher(root);
@@ -60,6 +61,7 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
         }
 
         _worker = RunWorkerAsync(_stopping.Token);
+        var initial = await _runner.RunAsync(_task, true, cancellationToken).ConfigureAwait(false);
         Synchronized?.Invoke(this, initial);
     }
 
@@ -92,16 +94,26 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
     {
         while (await _signals.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var forceFullScan = false;
-            while (_signals.Reader.TryRead(out var force))
+            while (_signals.Reader.TryRead(out _))
             {
-                forceFullScan |= force;
             }
 
             await Task.Delay(_debounce, cancellationToken).ConfigureAwait(false);
-            while (_signals.Reader.TryRead(out var force))
+            while (_signals.Reader.TryRead(out _))
             {
-                forceFullScan |= force;
+            }
+
+            string[] changedPaths;
+            lock (_changesGate)
+            {
+                changedPaths = _changedPaths.ToArray();
+                _changedPaths.Clear();
+            }
+
+            var forceFullScan = Interlocked.Exchange(ref _requiresFullScan, 0) != 0;
+            if (!forceFullScan)
+            {
+                _runner.InvalidatePaths(_task, changedPaths);
             }
 
             try
@@ -143,20 +155,36 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
 
     private IEnumerable<string> GetWatchedRoots()
     {
-        if (_task.Mode is SyncMode.LeftToRight or SyncMode.Bidirectional)
-        {
-            yield return SyncTaskDefinition.NormalizeRoot(_task.LeftPath);
-        }
-
-        if (_task.Mode is SyncMode.RightToLeft or SyncMode.Bidirectional)
-        {
-            yield return SyncTaskDefinition.NormalizeRoot(_task.RightPath);
-        }
+        yield return SyncTaskDefinition.NormalizeRoot(_task.LeftPath);
+        yield return SyncTaskDefinition.NormalizeRoot(_task.RightPath);
     }
 
-    private void OnChanged(object sender, FileSystemEventArgs eventArgs) => _signals.Writer.TryWrite(false);
+    private void OnChanged(object sender, FileSystemEventArgs eventArgs) => TrackChange(eventArgs.FullPath);
 
-    private void OnRenamed(object sender, RenamedEventArgs eventArgs) => _signals.Writer.TryWrite(false);
+    private void OnRenamed(object sender, RenamedEventArgs eventArgs)
+    {
+        TrackChange(eventArgs.OldFullPath);
+        TrackChange(eventArgs.FullPath);
+    }
 
-    private void OnError(object sender, ErrorEventArgs eventArgs) => _signals.Writer.TryWrite(true);
+    private void OnError(object sender, ErrorEventArgs eventArgs)
+    {
+        Interlocked.Exchange(ref _requiresFullScan, 1);
+        _signals.Writer.TryWrite(0);
+    }
+
+    private void TrackChange(string path)
+    {
+        lock (_changesGate)
+        {
+            _changedPaths.Add(Path.GetFullPath(path));
+            if (_changedPaths.Count > 4096)
+            {
+                _changedPaths.Clear();
+                Interlocked.Exchange(ref _requiresFullScan, 1);
+            }
+        }
+
+        _signals.Writer.TryWrite(0);
+    }
 }

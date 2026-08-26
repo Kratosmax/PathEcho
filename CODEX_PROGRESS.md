@@ -18,9 +18,10 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-26，Asia/Shanghai。
-- 版本：`0.3.1` 已正式发布，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。
-- 分支：`main`；当前正式版本为 `0.3.1`，历史正式标签保持固定，不移动已发布标签。
+- 版本：`0.4.0` 发布候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。当前线上正式版仍为 `0.3.1`，发布完成前不得提前宣称 `0.4.0` 已上线。
+- 分支：`main`；目标标签为 `v0.4.0`，历史正式标签保持固定，不移动已发布标签。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
+- 当前代码基线：发布准备开始时本地 `HEAD` 与 `origin/main` 均为 `6fbbfd39bc07ee6a34bc73dc14697fc675b0676b`；其上的同步与快照修复正在准备提交、推送并发布为 `0.4.0`。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
@@ -39,7 +40,10 @@ dotnet --version
 ## 已实现
 
 - 本机目录单向、反向和双向同步，支持删除策略、删除前备份和双向冲突策略。
-- 游戏存档定时、重点文件变化、文件变化和进程退出备份，支持内容去重、硬链接与复制回退、版本保留。
+- 游戏存档定时、重点文件变化、文件变化和进程退出备份；新版本使用完整逻辑清单与 SHA-256 对象库去重，不再创建会联动修改历史的硬链接视图。
+- 文件变化备份携带具体改名、新增和删除路径，只重新读取变化范围；重点文件、定时、游戏退出和监听溢出执行整目录快照，监听 overflow 使用独立原子标记，不会被普通事件覆盖。
+- 旧 `files` 快照继续支持浏览、迁移和回档；全部对象逐项验真后自动升级到 schema 2，损坏对象可回退有效旧视图。“打开备份”生成独立浏览副本，修改副本不会影响历史。
+- 备份迁移与导入按清单复制唯一对象并逐项校验；发现功能按 `(ProfileId, ProfileRoot)` 区分同 ID 的多份备份。
 - 整目录、变动文件和正则文件事务回档，包含占用识别、PID 与启动时间校验、关键进程保护和失败回滚。
 - WPF 主界面、业务弹窗、托盘、当前用户开机自启、统一设置页和预览截图模式。
 - Windows 11 build 22621+ 全客户区 Acrylic；DWM 返回失败、旧系统或 `PATHECHO_DISABLE_BACKDROP=1` 时完整回退为不透明 `#F4F7F8`。
@@ -54,6 +58,7 @@ dotnet --version
 - 可选 Debug 滚动日志、统一 PathEcho Logo、窗口/任务栏/托盘/安装器图标和高对比侧栏 Hover。
 - 同步任务页支持弹性列宽、绿色高对比 Hover/选中态、搜索与状态筛选、目录可用性提示、双击编辑、右键同步/编辑/复制/打开目录/删除，以及空数据禁用操作。
 - 同步任务支持相对路径 glob 包含/排除规则；扫描与规划均应用相同规则，跳过重解析点，预演与真实执行共用 `SyncPlanner` 且预演不更新目录或基线。
+- 同步监听记录具体路径并只失效相关哈希缓存；普通同步从每轮最多四次全目录枚举降为两次，只有生成冲突副本时为准确建立基线而额外重扫。`DeletionMode.Ignore` 优先于冲突偏好，目标端被外部修改也会触发单向校准。
 - 同步成功与失败运行记录原子保存并限制为最近 200 条；历史写入失败不会反转已经成功的文件同步结果。
 - 智能游戏识别从 GitHub 签名目录匹配当前运行进程，复用更新的 URL 前缀线路和 HTTP 出网代理，具备结构/大小/签名校验、原子缓存、离线回退和修订号防回退。
 - `config/game-catalog.source.json` 由独立 GitHub Actions 工作流用现有正式密钥签为 `config/game-catalog.json`；游戏规则可独立更新，不需要重新发布程序包。
@@ -67,7 +72,8 @@ dotnet --version
 
 ## 当前待办
 
-- 当前没有已授权但未完成的开发或发布动作；`v0.3.1` 源码、标签与 Release 均已推送。
+- 用户已明确授权提交、推送、打标签并发布 `0.4.0`；当前待完成本地发布门禁、GitHub Actions 与线上资产核验。
+- 发布完成前不得把候选状态写成线上成功；失败时保留标签与工作流证据并按发布规则递增版本修复。
 - `v0.3.0` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.1` 一次；旧客户端无法通过新包修复自身正在执行的旧更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
 
@@ -90,10 +96,11 @@ dotnet --version
 2026-08-26 本地候选实际通过：
 
 - `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误。
-- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：32/32 通过；新增覆盖首次失败后完整暂存、源读取失败重试、写入十次询问、继续后成功、停止后保留完整副本、取消不等待完整 5 秒、成功清理 temp、清理旧版本失败不重复建快照、历史筛选/双击编辑契约，以及更新器离开安装目录后可移动整个目录。
+- `dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build`：37/37 通过；本轮新增覆盖同大小同时间戳变化、忽略删除优先级、独立浏览副本、增量改名/删除清单、旧 schema 迁移与坏对象回退、同步/游戏监听 overflow、重点文件整目录语义、唯一对象导入及同 ID 不同根发现。
 - `dotnet format PathEcho.sln --no-restore --verify-no-changes` 与 `git diff --check` 通过。
-- 本地 Lite 预览包 `temp/preview-0.3.1/PathEcho-0.3.1-Lite.zip`：548550 字节，SHA-256 `D0CD268522BC30A4B23F92A0ABB2A87E33074337DBE619A189A4FF950D62AABD`；包内版本、Lite 通道和必需结构由发布脚本生成，仅用于本地验收，不是 Release。
-- 真实 WPF 920×620 截图 `temp/ui-check/game-edit-entry-fixed-920x620.png` 与 `temp/ui-check/backup-history-filter-920x620.png` 已核验：游戏编辑入口启用，备份操作列可见，历史搜索/游戏筛选/打开/回档均无重叠、截断或横向滚动。
+- 本地 `0.4.0` Lite 候选包 `temp/preview-0.4.0-candidate/PathEcho-0.4.0-Lite.zip`：563246 字节，SHA-256 `95011F90A11D0A2060C09B10697FBDB0C5F92389D66F5230F673F5A4D2759DDC`；包内版本、Lite 通道、结构及更新器 `--verify-only` 均通过。
+- 正式四包链已用一次性测试密钥演练到包生成：Lite ZIP 574262 字节、Lite Setup 2345544 字节、Full ZIP 103017741 字节、Full Setup 73100145 字节；Lite/Full ZIP 包内更新器预检均返回 0。测试密钥已删除，ReleaseTool 按安全设计拒绝测试密钥签出的清单；正式三份清单只能由 GitHub Actions 的 `PATHECHO_UPDATE_PRIVATE_KEY` 生成并在线验签。
+- `0.4.0` 包内程序真实 WPF 1180×760 截图 `temp/verification-20260826/packaged-history-0.4.0.png`：81005 字节，SHA-256 `185793E813B92A6FCBDAB99B0D5ED8642F49D4CA12C9FCC2925CCB75E936E2ED`；应用退出码 0，采样 8968 像素中 5864 个非白、104 种颜色。版本显示、历史搜索/筛选、长路径、滚动区及打开/回档按钮均无重叠或不可读文本。
 - Windows 应用控制辅助工具两次初始化均因自身 `failed to write kernel assets: 系统找不到指定的路径` 失败，因此未完成自动化双击动作；事件绑定、编辑构造器字段回填和 ID 保留由编译与静态契约测试覆盖，视觉由真实 WPF 主窗截图覆盖。
 
 2026-08-26 `v0.3.0` 发布后轻量核验：Actions Run `32874494465` 在 2 分 49 秒内完成且结论为 success；Release 非草稿、非预发布，8 个预期资产均为 uploaded，GitHub latest API 指向 `v0.3.0`。`update.json`、`update-lite.json` 和 `update-full.json` 可下载，版本均为 `0.3.0` 且带签名；兼容清单指向 Lite，Lite/Full 的下载 URL、大小与 SHA-256 均匹配对应 ZIP 资产。按用户要求未下载正式安装包或 ZIP，未执行真实旧版升级链。

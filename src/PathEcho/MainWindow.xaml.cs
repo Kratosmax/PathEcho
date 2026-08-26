@@ -311,15 +311,23 @@ public partial class MainWindow : Window
         });
     }
 
-    private void OnOpenSnapshot(object sender, RoutedEventArgs e)
+    private async void OnOpenSnapshot(object sender, RoutedEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not HistoryRow row)
         {
             return;
         }
 
-        var files = System.IO.Path.Combine(row.SnapshotDirectory, "files");
-        OpenDirectory(files);
+        string? browseDirectory = null;
+        await RunUiActionAsync($"正在准备 {row.GameName} 的独立浏览副本", async () =>
+        {
+            browseDirectory = await _runtime.PrepareSnapshotBrowseAsync(row);
+            StatusText.Text = "已生成独立浏览副本，修改该目录不会影响历史版本";
+        });
+        if (browseDirectory is not null)
+        {
+            OpenDirectory(browseDirectory);
+        }
     }
 
     private async void OnRestoreRow(object sender, RoutedEventArgs e)

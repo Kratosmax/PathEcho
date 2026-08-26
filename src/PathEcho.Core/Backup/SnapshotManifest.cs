@@ -2,7 +2,7 @@ namespace PathEcho.Core.Backup;
 
 public sealed record SnapshotManifest
 {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 2;
 
     public required Guid ProfileId { get; init; }
 

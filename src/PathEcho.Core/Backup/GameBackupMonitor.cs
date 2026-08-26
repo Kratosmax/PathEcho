@@ -10,16 +10,19 @@ public sealed class GameBackupMonitor : IAsyncDisposable
     private readonly GameBackupProfile _profile;
     private readonly GameBackupService _service;
     private readonly Regex[] _importantPatterns;
-    private readonly Channel<string> _fileChanges = Channel.CreateBounded<string>(new BoundedChannelOptions(256)
+    private readonly Channel<byte> _fileChanges = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
     {
-        FullMode = BoundedChannelFullMode.DropOldest,
+        FullMode = BoundedChannelFullMode.DropWrite,
         SingleReader = true,
         SingleWriter = false,
     });
     private readonly CancellationTokenSource _stopping = new();
     private readonly List<Task> _workers = new();
+    private readonly object _changesGate = new();
+    private readonly HashSet<string> _changedPaths = new(StringComparer.OrdinalIgnoreCase);
     private FileSystemWatcher? _watcher;
     private bool _processWasRunning;
+    private int _requiresFullSnapshot;
 
     public GameBackupMonitor(GameBackupProfile profile, GameBackupService service)
     {
@@ -83,27 +86,38 @@ public sealed class GameBackupMonitor : IAsyncDisposable
     {
         while (await _fileChanges.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            while (_fileChanges.Reader.TryRead(out var path))
+            while (_fileChanges.Reader.TryRead(out _))
             {
-                paths.Add(path);
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(750), cancellationToken).ConfigureAwait(false);
-            while (_fileChanges.Reader.TryRead(out var path))
+            while (_fileChanges.Reader.TryRead(out _))
             {
-                paths.Add(path);
             }
 
+            string[] paths;
+            lock (_changesGate)
+            {
+                paths = _changedPaths.ToArray();
+                _changedPaths.Clear();
+            }
+
+            var forceFullSnapshot = Interlocked.Exchange(ref _requiresFullSnapshot, 0) != 0;
+
             var trigger = _profile.Triggers.HasFlag(BackupTrigger.ImportantFileChanged) &&
-                paths.Any(IsImportantFile)
+                (forceFullSnapshot || paths.Any(IsImportantFile))
                     ? BackupTrigger.ImportantFileChanged
                     : _profile.Triggers.HasFlag(BackupTrigger.ChangedFiles)
                         ? BackupTrigger.ChangedFiles
                         : BackupTrigger.None;
             if (trigger != BackupTrigger.None)
             {
-                await TryCreateAsync(trigger, cancellationToken).ConfigureAwait(false);
+                await TryCreateAsync(
+                    trigger,
+                    cancellationToken,
+                    forceFullSnapshot || trigger == BackupTrigger.ImportantFileChanged
+                        ? null
+                        : paths).ConfigureAwait(false);
             }
         }
     }
@@ -132,11 +146,14 @@ public sealed class GameBackupMonitor : IAsyncDisposable
         }
     }
 
-    private async Task TryCreateAsync(BackupTrigger trigger, CancellationToken cancellationToken)
+    private async Task TryCreateAsync(
+        BackupTrigger trigger,
+        CancellationToken cancellationToken,
+        IReadOnlyCollection<string>? changedPaths = null)
     {
         try
         {
-            var result = await _service.CreateAsync(trigger, cancellationToken).ConfigureAwait(false);
+            var result = await _service.CreateAsync(trigger, cancellationToken, changedPaths).ConfigureAwait(false);
             if (result is not null)
             {
                 BackupCreated?.Invoke(this, result);
@@ -201,11 +218,34 @@ public sealed class GameBackupMonitor : IAsyncDisposable
     }
 
     private void OnFileChanged(object sender, FileSystemEventArgs eventArgs) =>
-        _fileChanges.Writer.TryWrite(Path.GetRelativePath(_profile.SaveDirectory, eventArgs.FullPath));
+        TrackChange(eventArgs.FullPath);
 
-    private void OnFileRenamed(object sender, RenamedEventArgs eventArgs) =>
-        _fileChanges.Writer.TryWrite(Path.GetRelativePath(_profile.SaveDirectory, eventArgs.FullPath));
+    private void OnFileRenamed(object sender, RenamedEventArgs eventArgs)
+    {
+        TrackChange(eventArgs.OldFullPath);
+        TrackChange(eventArgs.FullPath);
+    }
 
-    private void OnWatcherError(object sender, ErrorEventArgs eventArgs) =>
+    private void OnWatcherError(object sender, ErrorEventArgs eventArgs)
+    {
+        Interlocked.Exchange(ref _requiresFullSnapshot, 1);
+        _fileChanges.Writer.TryWrite(0);
         BackupFailed?.Invoke(this, eventArgs.GetException());
+    }
+
+    private void TrackChange(string fullPath)
+    {
+        var relativePath = Path.GetRelativePath(_profile.SaveDirectory, fullPath);
+        lock (_changesGate)
+        {
+            _changedPaths.Add(relativePath);
+            if (_changedPaths.Count > 4096)
+            {
+                _changedPaths.Clear();
+                Interlocked.Exchange(ref _requiresFullSnapshot, 1);
+            }
+        }
+
+        _fileChanges.Writer.TryWrite(0);
+    }
 }

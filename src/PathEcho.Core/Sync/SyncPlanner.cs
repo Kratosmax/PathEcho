@@ -144,6 +144,14 @@ public sealed class SyncPlanner
         FileStamp? right,
         ICollection<SyncAction> actions)
     {
+        if (task.DeletionMode == DeletionMode.Ignore && (left is null) != (right is null))
+        {
+            actions.Add(left is null
+                ? new SyncAction(SyncActionKind.CopyRightToLeft, path, "忽略删除，保留现存文件")
+                : new SyncAction(SyncActionKind.CopyLeftToRight, path, "忽略删除，保留现存文件"));
+            return;
+        }
+
         switch (task.ConflictPolicy)
         {
             case ConflictPolicy.PreferLeft:

@@ -7,7 +7,8 @@ public interface IBackupSnapshotStore
         string sourceDirectory,
         string backupDirectory,
         string trigger,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? changedPaths = null);
 
     Task<int> PruneAsync(
         Guid profileId,

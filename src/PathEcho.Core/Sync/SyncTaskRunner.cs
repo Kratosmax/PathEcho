@@ -9,6 +9,7 @@ public sealed class SyncTaskRunner
     private readonly Func<Guid, SyncBaseline, CancellationToken, Task> _saveBaseline;
     private readonly Func<SyncTaskDefinition, SyncBaseline, bool, CancellationToken, Task<SyncRunResult>> _run;
     private readonly Func<SyncTaskDefinition, SyncBaseline, CancellationToken, Task<SyncPreviewResult>>? _preview;
+    private readonly SyncEngine? _engine;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     public SyncTaskRunner(SyncEngine engine, SyncBaselineStore baselineStore)
@@ -18,6 +19,7 @@ public sealed class SyncTaskRunner
             engine.RunAsync,
             engine.PreviewAsync)
     {
+        _engine = engine;
     }
 
     internal SyncTaskRunner(
@@ -49,6 +51,11 @@ public sealed class SyncTaskRunner
         {
             _gate.Release();
         }
+    }
+
+    public void InvalidatePaths(SyncTaskDefinition task, IEnumerable<string> changedPaths)
+    {
+        _engine?.InvalidatePaths(task, changedPaths);
     }
 
     public async Task<SyncPreviewResult> PreviewAsync(

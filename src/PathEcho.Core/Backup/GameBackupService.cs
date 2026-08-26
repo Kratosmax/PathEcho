@@ -35,7 +35,8 @@ public sealed class GameBackupService
 
     public async Task<SnapshotCreationResult?> CreateAsync(
         BackupTrigger trigger,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyCollection<string>? changedPaths = null)
     {
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
         var effectiveCancellation = linkedCancellation.Token;
@@ -59,7 +60,8 @@ public sealed class GameBackupService
                     _profile.SaveDirectory,
                     _backupDirectory,
                     triggerName,
-                    effectiveCancellation).ConfigureAwait(false);
+                    effectiveCancellation,
+                    changedPaths).ConfigureAwait(false);
             }
             catch (Exception exception) when (IsRetryable(exception, effectiveCancellation))
             {

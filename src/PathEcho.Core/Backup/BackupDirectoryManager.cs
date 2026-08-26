@@ -1,5 +1,5 @@
-using System.Security.Cryptography;
 using System.Text.Json;
+using PathEcho.Core.IO;
 using PathEcho.Core.Sync;
 
 namespace PathEcho.Core.Backup;
@@ -12,11 +12,11 @@ public sealed record DiscoveredBackup(
 
 public sealed class BackupDirectoryManager
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new();
+    private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = true };
 
     public async Task EnsureWritableAsync(string backupDirectory, CancellationToken cancellationToken = default)
     {
-        var root = NormalizeRoot(backupDirectory);
+        var root = SafePath.NormalizeDirectory(backupDirectory, "备份目录不能为空。");
         Directory.CreateDirectory(root);
         var probe = Path.Combine(root, $".pathecho-write-test-{Guid.NewGuid():N}.tmp");
         try
@@ -47,8 +47,8 @@ public sealed class BackupDirectoryManager
         string newBackupDirectory,
         CancellationToken cancellationToken = default)
     {
-        var oldRoot = NormalizeRoot(oldBackupDirectory);
-        var newRoot = NormalizeRoot(newBackupDirectory);
+        var oldRoot = SafePath.NormalizeDirectory(oldBackupDirectory, "原备份目录不能为空。");
+        var newRoot = SafePath.NormalizeDirectory(newBackupDirectory, "新备份目录不能为空。");
         if (string.Equals(oldRoot, newRoot, StringComparison.OrdinalIgnoreCase))
         {
             return false;
@@ -80,7 +80,7 @@ public sealed class BackupDirectoryManager
         var stage = Path.Combine(newRoot, $".{profileId:N}-{Guid.NewGuid():N}.moving");
         try
         {
-            await CopyAndVerifyTreeAsync(source, stage, cancellationToken).ConfigureAwait(false);
+            await CopyAndVerifyProfileAsync(source, stage, cancellationToken).ConfigureAwait(false);
             Directory.Move(stage, destination);
             DirectoryTree.DeleteIfPresent(source);
             return true;
@@ -97,7 +97,7 @@ public sealed class BackupDirectoryManager
         string targetBackupDirectory,
         CancellationToken cancellationToken = default)
     {
-        var targetRoot = NormalizeRoot(targetBackupDirectory);
+        var targetRoot = SafePath.NormalizeDirectory(targetBackupDirectory, "目标备份目录不能为空。");
         var destination = Path.Combine(targetRoot, discovered.ProfileId.ToString("N"));
         if (Directory.Exists(destination))
         {
@@ -108,7 +108,7 @@ public sealed class BackupDirectoryManager
         var stage = Path.Combine(targetRoot, $".{discovered.ProfileId:N}-{Guid.NewGuid():N}.importing");
         try
         {
-            await CopyAndVerifyTreeAsync(discovered.ProfileDirectory, stage, cancellationToken).ConfigureAwait(false);
+            await CopyAndVerifyProfileAsync(discovered.ProfileDirectory, stage, cancellationToken).ConfigureAwait(false);
             Directory.Move(stage, destination);
             return discovered with { ProfileDirectory = destination };
         }
@@ -123,123 +123,124 @@ public sealed class BackupDirectoryManager
         string searchDirectory,
         CancellationToken cancellationToken = default)
     {
-        var root = NormalizeRoot(searchDirectory);
+        var root = SafePath.NormalizeDirectory(searchDirectory, "搜索目录不能为空。");
         if (!Directory.Exists(root))
         {
             return Array.Empty<DiscoveredBackup>();
         }
 
-        var grouped = new Dictionary<Guid, List<(string Manifest, SnapshotManifest Data)>>();
+        var grouped = new Dictionary<string, List<SnapshotManifest>>(StringComparer.OrdinalIgnoreCase);
+        var roots = new Dictionary<string, (Guid ProfileId, string ProfileRoot)>(StringComparer.OrdinalIgnoreCase);
         foreach (var manifestPath in Directory.EnumerateFiles(root, "manifest.json", SearchOption.AllDirectories))
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                await using var stream = File.OpenRead(manifestPath);
-                var manifest = await JsonSerializer.DeserializeAsync<SnapshotManifest>(stream, SerializerOptions, cancellationToken)
-                    .ConfigureAwait(false);
-                if (manifest is null)
+                var snapshotRoot = Path.GetDirectoryName(manifestPath)
+                    ?? throw new InvalidDataException("快照清单缺少父目录。");
+                var snapshotsRoot = Directory.GetParent(snapshotRoot)
+                    ?? throw new InvalidDataException("快照目录缺少 snapshots 父目录。");
+                if (!snapshotsRoot.Name.Equals("snapshots", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                if (!grouped.TryGetValue(manifest.ProfileId, out var manifests))
+                var profileRoot = snapshotsRoot.Parent?.FullName
+                    ?? throw new InvalidDataException("快照目录缺少游戏备份根目录。");
+                var manifest = await SnapshotContent.ReadManifestAsync(snapshotRoot, cancellationToken).ConfigureAwait(false);
+                var key = $"{manifest.ProfileId:N}|{Path.GetFullPath(profileRoot)}";
+                if (!grouped.TryGetValue(key, out var manifests))
                 {
-                    manifests = new List<(string, SnapshotManifest)>();
-                    grouped.Add(manifest.ProfileId, manifests);
+                    manifests = new List<SnapshotManifest>();
+                    grouped.Add(key, manifests);
+                    roots.Add(key, (manifest.ProfileId, profileRoot));
                 }
 
-                manifests.Add((manifestPath, manifest));
+                manifests.Add(manifest);
             }
-            catch (JsonException)
-            {
-            }
-            catch (InvalidDataException)
+            catch (Exception exception) when (exception is JsonException or InvalidDataException or IOException or UnauthorizedAccessException)
             {
             }
         }
 
-        return grouped.Select(pair =>
-        {
-            var firstManifest = pair.Value[0].Manifest;
-            var snapshotsRoot = Directory.GetParent(Path.GetDirectoryName(firstManifest)!)?.FullName
-                ?? throw new InvalidDataException("无法识别备份目录结构。");
-            var profileRoot = Directory.GetParent(snapshotsRoot)?.FullName
-                ?? throw new InvalidDataException("无法识别游戏备份根目录。");
-            return new DiscoveredBackup(
-                pair.Key,
-                profileRoot,
+        return grouped.Select(pair => new DiscoveredBackup(
+                roots[pair.Key].ProfileId,
+                roots[pair.Key].ProfileRoot,
                 pair.Value.Count,
-                pair.Value.Max(item => item.Data.CreatedAtUtc));
-        }).OrderByDescending(item => item.LatestBackupAtUtc).ToArray();
+                pair.Value.Max(item => item.CreatedAtUtc)))
+            .OrderByDescending(item => item.LatestBackupAtUtc)
+            .ToArray();
     }
 
-    private static async Task CopyAndVerifyTreeAsync(
-        string sourceRoot,
-        string destinationRoot,
+    private static async Task CopyAndVerifyProfileAsync(
+        string sourceProfileRoot,
+        string destinationProfileRoot,
         CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(destinationRoot);
-        foreach (var source in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+        var sourceSnapshotsRoot = Path.Combine(sourceProfileRoot, "snapshots");
+        if (!Directory.Exists(sourceSnapshotsRoot))
+        {
+            throw new InvalidDataException("备份缺少 snapshots 目录。");
+        }
+
+        var copiedObjects = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sourceSnapshot in Directory.EnumerateDirectories(sourceSnapshotsRoot)
+                     .Where(path => !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal)))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var relative = Path.GetRelativePath(sourceRoot, source);
-            var destination = SafeCombine(destinationRoot, relative);
-            await AtomicFileOperations.CopyAsync(source, destination, cancellationToken).ConfigureAwait(false);
-            var sourceHash = await ComputeHashAsync(source, cancellationToken).ConfigureAwait(false);
-            var destinationHash = await ComputeHashAsync(destination, cancellationToken).ConfigureAwait(false);
-            if (!string.Equals(sourceHash, destinationHash, StringComparison.Ordinal))
+            var manifest = await SnapshotContent.ReadManifestAsync(sourceSnapshot, cancellationToken).ConfigureAwait(false);
+            foreach (var entry in manifest.Files)
             {
-                throw new IOException($"移动备份校验失败：{relative}");
+                if (!copiedObjects.Add(entry.Sha256))
+                {
+                    continue;
+                }
+
+                var source = await SnapshotContent.ResolveVerifiedFileAsync(sourceSnapshot, entry, cancellationToken)
+                    .ConfigureAwait(false);
+
+                var destination = SnapshotContent.GetObjectPath(destinationProfileRoot, entry.Sha256);
+                await AtomicFileOperations.CopyAsync(source, destination, cancellationToken).ConfigureAwait(false);
+                var destinationHash = await ContentHash.ComputeAsync(destination, cancellationToken).ConfigureAwait(false);
+                if (!string.Equals(destinationHash, entry.Sha256, StringComparison.Ordinal))
+                {
+                    throw new IOException($"移动备份对象校验失败：{entry.RelativePath}");
+                }
             }
 
-            File.SetAttributes(destination, File.GetAttributes(source));
+            var destinationSnapshot = Path.Combine(
+                destinationProfileRoot,
+                "snapshots",
+                Path.GetFileName(sourceSnapshot));
+            Directory.CreateDirectory(destinationSnapshot);
+            await WriteManifestAsync(
+                Path.Combine(destinationSnapshot, "manifest.json"),
+                manifest with { SchemaVersion = 2 },
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!Directory.EnumerateDirectories(sourceSnapshotsRoot)
+                .Any(path => !Path.GetFileName(path).StartsWith(".", StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException("备份中没有可导入的快照。");
         }
     }
 
-    private static async Task<string> ComputeHashAsync(string path, CancellationToken cancellationToken)
+    private static async Task WriteManifestAsync(
+        string path,
+        SnapshotManifest manifest,
+        CancellationToken cancellationToken)
     {
-        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
-        return Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false));
+        await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, true);
+        await JsonSerializer.SerializeAsync(stream, manifest, SerializerOptions, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static void ValidateSeparateRoots(string first, string second)
     {
-        if (IsSameOrNested(first, second) || IsSameOrNested(second, first))
+        if (SafePath.IsSameOrNested(first, second) || SafePath.IsSameOrNested(second, first))
         {
             throw new InvalidOperationException("新旧备份目录不能相同或互相包含。");
         }
     }
-
-    private static bool IsSameOrNested(string parent, string candidate)
-    {
-        var relative = Path.GetRelativePath(parent, candidate);
-        return relative == "." ||
-            (!relative.Equals("..", StringComparison.Ordinal) &&
-             !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
-             !Path.IsPathRooted(relative));
-    }
-
-    private static string NormalizeRoot(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException("备份目录不能为空。");
-        }
-
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
-    }
-
-    private static string SafeCombine(string root, string relativePath)
-    {
-        var combined = Path.GetFullPath(Path.Combine(root, relativePath));
-        var prefix = Path.TrimEndingDirectorySeparator(root) + Path.DirectorySeparatorChar;
-        if (!combined.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException("备份文件路径超出目标目录。");
-        }
-
-        return combined;
-    }
-
 }
