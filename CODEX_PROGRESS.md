@@ -18,10 +18,10 @@ dotnet --version
 ## 当前快照
 
 - 最后核验：2026-08-26，Asia/Shanghai。
-- 版本：`0.5.0` 发布候选，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。发布前 GitHub latest 仍已核验指向 `v0.4.0`。
-- 分支：`main`；正式标签 `v0.4.0` 指向功能提交 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`，历史正式标签保持固定。
+- 版本：`0.5.0` 正式版，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。GitHub latest 已核验指向 `v0.5.0`。
+- 分支：`main`；正式标签 `v0.5.0` 指向功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`，历史正式标签保持固定。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
-- 当前发布代码基线：`v0.4.0` 固定在功能提交 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`；`main` 仅在其后追加本发布证据文档提交，产品代码与标签一致。
+- 当前发布代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；`main` 仅在其后追加本发布证据文档提交，产品代码与标签一致。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
@@ -34,6 +34,7 @@ dotnet --version
 - `v0.3.0` 已正式发布：标签指向 `2f57bf220217ddf286dfc667ff4aaa8de4012494`，GitHub Actions Run `32874494465` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.3.0`；8 个资产均为 uploaded，latest 已指向该版本，三份签名清单的版本、通道、ZIP URL、大小和 SHA-256 与 Release 资产一致。按用户要求未下载 Full/Lite 包，也未执行真实旧版升级链。
 - `v0.3.1` 已正式发布：标签指向 `d54c13bc4b7f8cc9053cbe689c190375fd22527f`，GitHub Actions Run `32876134335` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.3.1`；8 个资产均为 uploaded，latest 已指向该版本，三份签名清单与 Release ZIP 元数据一致。
 - `v0.4.0` 已正式发布：标签指向 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`，GitHub Actions Run `32945051053` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.4.0`；8 个资产、7 条 SHA-256、三份正式签名清单、Lite/Full 包结构、latest 路由及 `v0.3.1 -> v0.4.0` 隔离升级链均已核验。
+- `v0.5.0` 已正式发布：标签指向 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`，GitHub Actions Run `32972364039` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.5.0`；8 个资产、7 条 SHA-256、三份正式签名清单、Lite 包结构、latest 路由及 `v0.4.0 -> v0.5.0` 隔离升级事务均已核验。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
@@ -75,8 +76,8 @@ dotnet --version
 
 ## 当前待办
 
-- 自动备份通知、三层快照保留和版本文件清单已在本地实现；用户已授权更新并发布 `v0.5.0`，待完成发布门禁、提交、推送、标签、Actions 和线上核验。
-- `v0.4.0` 已公开，不得覆盖同版本资产；后续修复必须递增版本并保留现有标签和 Release 审计记录。
+- 当前无已授权但未完成的发布任务；等待用户后续需求。
+- `v0.5.0` 已公开，不得覆盖同版本资产；后续修复必须递增版本并保留现有标签和 Release 审计记录。
 - `v0.3.0` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.1` 一次；旧客户端无法通过新包修复自身正在执行的旧更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
 
@@ -95,6 +96,13 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-08-26 `v0.5.0` 发布后实际通过：
+
+- GitHub Actions Run `32972364039` 在 3 分 18 秒内完成且结论为 success，`headSha` 为标签提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；Release 非草稿、非预发布，GitHub latest API 与 `releases/latest/download/update.json` 均指向 `v0.5.0`。
+- 8 个预期资产全部为 uploaded，`SHA256SUMS.txt` 恰有 7 条并逐项匹配 Release API digest；Full Setup、Full ZIP、Lite Setup、Lite ZIP 的 SHA-256 分别为 `DFBD5F9FE53CF71358454BAC32A662975F6945118A347E5D78D0B7FE26AD0654`、`E8E350C6FB452AD48E96E4EED3996FDB52D18501DFBB90D5C7673A53B76458DE`、`9577D02E360B4B74D8974E1F01CA27F763D042BBFDF46EF66F4703B1DB278F08`、`4FDE46880EA95D1CF4E2F0340FBA2C3AC2A35B4094ADC148F80AE71D10BB2A7D`。
+- `update.json` 与 `update-lite.json` 逐字节一致；三份清单使用 PathEcho 内置正式 ECDSA 公钥实际验签通过。Lite 指向 599771 字节正式 ZIP，Full 指向 99863597 字节正式 ZIP，版本、通道、URL、大小和 SHA-256 均匹配 Release 资产。
+- 正式 Lite ZIP 同时通过 `v0.5.0` 与官方 `v0.4.0` 包内更新器的哈希、版本、通道和结构预检。官方 `v0.4.0` 原始 Lite 更新器又使用线上签名清单和正式包在隔离目录完成替换、`0.5.0` 启动就绪、结果反馈与旧版备份清理；结果为 `succeeded`，stage/backup、测试进程和临时状态目录联接均无残留。
 
 2026-08-26 `v0.5.0` 发布候选门禁实际通过：
 
@@ -228,7 +236,7 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 ## 维护
 
 每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前正式版本：`0.4.0`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+> 当前正式版本：`0.5.0`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
 
 `0.2.8` 本地候选验证：更新交接改用落盘握手，更新器全程持有独占锁，普通启动只瞬时探测更新事务以保留原有单实例唤醒；安装目录移动、回滚、卸载器保留和 launcher 复制使用有限文件占用重试并报告阶段/路径，失败写入独立轮转日志，半成品与过期缓存可清理。Release 与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 27/27、`dotnet format --verify-no-changes` 与 `git diff --check` 通过。Lite 预览包 `temp/preview-0.2.8-final/PathEcho-0.2.8-Lite.zip` 为 527726 字节，SHA-256 `19FDB471A8D585F1291F9BCE1DF347032A9ACDBE86A38D7B63DE21626F2D6883`；包内新更新器与 `v0.2.7` 原始更新器的版本/通道/哈希/结构预检均返回 0。1180×760 真实 WPF 截图位于 `temp/preview-0.2.8-final/main-window.png`，进程退出码 0。最终更新器在隔离安装副本中面对 1.2 秒独占文件仍完成替换、ready 和备份清理，退出码 0、事务残留 0；后续正式发布状态以当前快照为准。
 
