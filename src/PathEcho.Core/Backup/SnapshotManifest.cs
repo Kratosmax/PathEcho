@@ -32,7 +32,10 @@ public sealed record SnapshotCreationResult(
     int HardLinkedFileCount,
     int CopiedViewFileCount);
 
-public sealed record SnapshotVersion(string SnapshotDirectory, SnapshotManifest Manifest);
+public sealed record SnapshotVersion(string SnapshotDirectory, SnapshotManifest Manifest)
+{
+    public bool IsContentAvailable { get; init; } = true;
+}
 
 public sealed record SnapshotRetentionPolicy(
     int RecentVersions,

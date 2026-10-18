@@ -156,18 +156,17 @@
                         <RowDefinition Height="20"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
-                    <Grid>
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel>
-                            <TextBlock Text="游戏存档" FontSize="26" FontWeight="SemiBold"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <StackPanel>
+                        <TextBlock Text="游戏存档" FontSize="26" FontWeight="SemiBold"/>
+                        <WrapPanel Margin="0,12,0,0">
                             <Button x:Name="EditGameButton" Content="编辑" Click="OnEditGame" IsEnabled="False" Margin="0,0,8,0"/>
                             <Button x:Name="DeleteGameButton" Content="删除选中" Style="{StaticResource DangerButton}" Click="OnDeleteGame" IsEnabled="False" Margin="0,0,8,0"/>
+                            <Button x:Name="ExportGameButton" Content="导出配置" Click="OnExportGame" IsEnabled="False" Margin="0,0,8,0"/>
+                            <Button Content="导入配置" Click="OnImportGame" Margin="0,0,8,0"/>
                             <Button Content="智能识别" Click="OnDiscoverGames" Margin="0,0,8,0"/>
                             <Button Content="+  添加游戏" Style="{StaticResource PrimaryButton}" Click="OnAddGame"/>
-                        </StackPanel>
-                    </Grid>
+                        </WrapPanel>
+                    </StackPanel>
                     <Grid Grid.Row="2">
                         <DataGrid x:Name="GameGrid" ItemsSource="{Binding GameProfiles}" SelectionChanged="OnGameSelectionChanged"
                                   MouseDoubleClick="OnGameRowDoubleClick" FrozenColumnCount="1">
@@ -232,13 +231,14 @@
                                 <DataGridTextColumn Header="备份时间" Binding="{Binding CreatedAt}" Width="136" ElementStyle="{StaticResource GridTextStyle}"/>
                                 <DataGridTextColumn Header="触发方式" Binding="{Binding Trigger}" Width="88" ElementStyle="{StaticResource GridTextStyle}"/>
                                 <DataGridTextColumn Header="文件数" Binding="{Binding FileCount}" Width="56" ElementStyle="{StaticResource GridTextStyle}"/>
+                                <DataGridTextColumn Header="来源 / 状态" Binding="{Binding Availability}" Width="92" ElementStyle="{StaticResource GridTextStyle}"/>
                                 <DataGridTextColumn Header="快照目录" Binding="{Binding SnapshotDirectory}" Width="1.7*" MinWidth="130" ElementStyle="{StaticResource GridTextStyle}"/>
                                 <DataGridTemplateColumn Header="" Width="116">
                                     <DataGridTemplateColumn.CellTemplate>
                                         <DataTemplate>
                                             <StackPanel Orientation="Horizontal">
-                                                <Button Content="打开" Padding="7,0" MinHeight="30" Click="OnOpenSnapshot" Margin="0,0,5,0"/>
-                                                <Button Content="回档" Padding="7,0" MinHeight="30" Style="{StaticResource PrimaryButton}" Click="OnRestoreRow"/>
+                                                <Button Content="打开" Padding="7,0" MinHeight="30" Click="OnOpenSnapshot" Margin="0,0,5,0" IsEnabled="{Binding IsContentAvailable}"/>
+                                                <Button Content="回档" Padding="7,0" MinHeight="30" Style="{StaticResource PrimaryButton}" Click="OnRestoreRow" IsEnabled="{Binding IsContentAvailable}"/>
                                             </StackPanel>
                                         </DataTemplate>
                                     </DataGridTemplateColumn.CellTemplate>

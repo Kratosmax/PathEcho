@@ -14,6 +14,8 @@
             </Grid.RowDefinitions>
             <TextBlock x:Name="TitleText" Text="添加游戏存档" FontSize="22" FontWeight="SemiBold"/>
             <StackPanel Grid.Row="1" Margin="0,18,0,0">
+                <TextBlock x:Name="ImportHint" Visibility="Collapsed" Text="配置已载入。请确认本机存档目录、云盘备份目录和游戏程序路径，保存后才会添加档案并启用监听。导入配置不会恢复或覆盖存档。"
+                           TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                 <TextBlock Text="游戏名称" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,6"/>
                 <TextBox x:Name="NameBox"/>
             </StackPanel>
@@ -28,6 +30,11 @@
                 <Grid><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="8"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                     <TextBox x:Name="BackupPathBox"/><Button Grid.Column="2" Content="浏览" Click="OnBrowseBackup"/>
                 </Grid>
+                <CheckBox x:Name="OtherDevicesCheck" Content="识别此目录内其他设备的备份" Margin="0,10,0,0"/>
+                <TextBlock Text="跨设备时，两端选择同一游戏的云盘备份目录；每 5 秒刷新历史，手动选择回档。此目录不能混放其他游戏。"
+                           Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                <TextBlock x:Name="LinkedBackupHint" Visibility="Collapsed" Text="已关联导出设备的备份档案；选择其在本机的备份目录后，历史会自动读取。"
+                           Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,6,0,0" TextWrapping="Wrap"/>
             </StackPanel>
             <StackPanel Grid.Row="4" Margin="0,18,0,0">
                 <TextBlock Text="备份触发" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,8"/>

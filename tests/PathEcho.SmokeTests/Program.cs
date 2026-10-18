@@ -27,6 +27,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("同大小同时间戳变化在监听失效后仍可同步", TestSameStampInvalidationAsync),
     ("忽略删除优先于双向冲突策略", TestIgnoreDeletionConflictAsync),
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
+    ("跨设备历史兼容不同 ID、分批到达并可手动回档", TestSharedBackupHistoryAsync),
+    ("游戏配置可跨设备导出导入并拒绝重复和无效文件", TestGameProfileTransferAsync),
     ("快照按最近、每小时和每日分层保留", TestSnapshotRetentionPlannerAsync),
     ("增量快照可记录改名删除并兼容旧版本", TestIncrementalAndLegacySnapshotAsync),
     ("备份失败会完整暂存并恢复写入", TestBackupRetryRecoveryAsync),
@@ -81,6 +83,147 @@ catch (Exception exception)
 finally
 {
     DeleteTree(testRoot);
+}
+
+async Task TestSharedBackupHistoryAsync()
+{
+    var root = Path.Combine(testRoot, "shared-history");
+    var sourceA = Path.Combine(root, "device-a");
+    var sourceB = Path.Combine(root, "device-b");
+    var cloud = Path.Combine(root, "cloud-game");
+    Directory.CreateDirectory(sourceA);
+    Directory.CreateDirectory(sourceB);
+    await File.WriteAllTextAsync(Path.Combine(sourceA, "slot.sav"), "progress from A");
+    await File.WriteAllTextAsync(Path.Combine(sourceB, "slot.sav"), "local B");
+    var profileA = Guid.NewGuid();
+    var profileB = new GameBackupProfile
+    {
+        Name = "shared game",
+        SaveDirectory = sourceB,
+        BackupDirectory = cloud,
+        IncludeOtherDeviceBackups = true,
+        Triggers = BackupTrigger.ChangedFiles,
+    };
+    var configuration = new AppConfiguration
+    {
+        DefaultBackupDirectory = Path.Combine(root, "default"),
+        GameProfiles = new[] { profileB },
+    };
+    True(profileB.HasDedicatedBackupDirectory(configuration), "游戏专用目录未被识别。");
+    False(profileB.HasDedicatedBackupDirectory(configuration with { DefaultBackupDirectory = cloud + Path.DirectorySeparatorChar }), "允许共用全局目录。");
+    False(profileB.HasDedicatedBackupDirectory(configuration with
+    {
+        GameProfiles = new[] { profileB, profileB with { Id = Guid.NewGuid() } },
+    }), "允许多个游戏共享关联范围。");
+    False(new GameBackupProfile().IncludeOtherDeviceBackups, "旧配置不应默认关联其他游戏。");
+    var configurationPath = Path.Combine(root, "configuration.json");
+    var configStore = new JsonConfigurationStore(configurationPath);
+    await configStore.SaveAsync(configuration);
+    True((await configStore.LoadAsync()).GameProfiles.Single().IncludeOtherDeviceBackups, "跨设备选项未持久化。");
+
+    var store = new SnapshotStore();
+    var created = await store.CreateAsync(profileA, sourceA, cloud, "A backup");
+    Equal(0, (await store.ListAsync(profileB.Id, cloud)).Count, "未启用关联时混入其他 ID。");
+    var versions = await store.ListAsync(profileB.Id, cloud, includeOtherProfiles: true);
+    Equal(1, versions.Count, "未发现另一设备的版本。");
+    True(versions.Single().IsContentAvailable, "完整备份不可用。");
+    Equal("local B", await File.ReadAllTextAsync(Path.Combine(sourceB, "slot.sav")), "刷新历史自动覆盖了本机存档。");
+    var entry = versions.Single().Manifest.Files.Single();
+    var objectPath = SnapshotContent.GetObjectPath(Path.Combine(cloud, profileA.ToString("N")), entry.Sha256);
+    var bytes = await File.ReadAllBytesAsync(objectPath);
+    File.Delete(objectPath);
+    versions = await store.ListAsync(profileB.Id, cloud, includeOtherProfiles: true);
+    False(versions.Single().IsContentAvailable, "清单先到时未标记等待。");
+    var restore = new SnapshotRestoreService(new EmptyOccupancyService());
+    await ExpectThrowsAsync<InvalidDataException>(() => restore.RestoreAsync(new RestoreRequest
+    {
+        SnapshotDirectory = created.SnapshotDirectory,
+        TargetDirectory = sourceB,
+        Mode = RestoreMode.CleanDirectory,
+    }), "缺失对象的云端版本不应恢复成功。");
+    Equal("local B", await File.ReadAllTextAsync(Path.Combine(sourceB, "slot.sav")), "不完整云端版本损坏了本机存档。");
+    await File.WriteAllBytesAsync(objectPath, bytes[..2]);
+    False((await store.ListAsync(profileB.Id, cloud, includeOtherProfiles: true)).Single().IsContentAvailable, "部分对象被标为可用。");
+    await File.WriteAllBytesAsync(objectPath, bytes);
+    True((await store.ListAsync(profileB.Id, cloud, includeOtherProfiles: true)).Single().IsContentAvailable, "文件到齐后未恢复可用。");
+    var malformed = Path.Combine(cloud, profileA.ToString("N"), "snapshots", "bad");
+    Directory.CreateDirectory(malformed);
+    await File.WriteAllTextAsync(Path.Combine(malformed, "manifest.json"), "{");
+    var pending = Path.Combine(cloud, profileA.ToString("N"), "snapshots", ".sync.pending");
+    Directory.CreateDirectory(pending);
+    File.Copy(Path.Combine(created.SnapshotDirectory, "manifest.json"), Path.Combine(pending, "manifest.json"));
+    Equal(1, (await store.ListAsync(profileB.Id, cloud, includeOtherProfiles: true)).Count, "半写清单隐藏了有效历史或 pending 被列出。");
+    await restore.RestoreAsync(new RestoreRequest
+    {
+        SnapshotDirectory = created.SnapshotDirectory,
+        TargetDirectory = sourceB,
+        Mode = RestoreMode.CleanDirectory,
+    });
+    Equal("progress from A", await File.ReadAllTextAsync(Path.Combine(sourceB, "slot.sav")), "跨 ID 手动回档失败。");
+    await store.CreateAsync(profileB.Id, sourceB, cloud, "B backup");
+    Equal(2, (await store.ListAsync(profileB.Id, cloud, includeOtherProfiles: true)).Count, "两端版本未并存。");
+    await store.PruneAsync(profileB.Id, cloud, new SnapshotRetentionPolicy(1, 0, 0));
+    True(File.Exists(Path.Combine(created.SnapshotDirectory, "manifest.json")), "本机清理删除了另一设备历史。");
+}
+
+async Task TestGameProfileTransferAsync()
+{
+    var root = Path.Combine(testRoot, "game-profile-transfer");
+    Directory.CreateDirectory(root);
+    var source = new GameBackupProfile
+    {
+        Name = "寻日之旅",
+        SaveDirectory = Path.Combine(root, "A-saves"),
+        Triggers = BackupTrigger.Scheduled | BackupTrigger.ChangedFiles | BackupTrigger.ProcessExited,
+        ProcessExecutablePath = Path.Combine(root, "A-game.exe"),
+        ScheduleInterval = TimeSpan.FromMinutes(40),
+        MinimumBackupInterval = TimeSpan.FromMinutes(3),
+        RetainedVersions = 18,
+        RetainedHourlyVersions = 4,
+        RetainedDailyVersions = 9,
+        BackupNotificationMode = BackupNotificationMode.Disabled,
+    };
+    var cloud = Path.Combine(root, "cloud");
+    var path = Path.Combine(root, "game.pathecho-game.json");
+    await GameProfileTransfer.ExportAsync(source, cloud, path);
+    True(File.Exists(path), "配置导出未落盘。");
+    Equal(1, Directory.EnumerateFiles(root).Count(), "导出残留临时文件或导出了存档内容。");
+    var draft = await GameProfileTransfer.ReadImportDraftAsync(path, Array.Empty<GameBackupProfile>());
+    False(draft.Id == source.Id, "导入复用了写入与清理 ID。");
+    True(draft.LinkedBackupProfileIds.Contains(source.Id), "导入丢失原备份档案关联。");
+    Equal(source.Name, draft.Name, "导入丢失游戏名称。");
+    Equal(source.SaveDirectory, draft.SaveDirectory, "原存档路径未提供给用户确认。");
+    Equal(cloud, draft.BackupDirectory!, "默认备份目录未解析到导出文件。");
+    Equal(source.ProcessExecutablePath!, draft.ProcessExecutablePath!, "程序路径未提供给用户确认。");
+    Equal(source.Triggers, draft.Triggers, "触发规则丢失。");
+    Equal(source.ScheduleInterval, draft.ScheduleInterval, "定时间隔丢失。");
+    Equal(source.MinimumBackupInterval, draft.MinimumBackupInterval, "最低间隔丢失。");
+    Equal(source.RetainedVersions, draft.RetainedVersions, "保留策略丢失。");
+    Equal(source.RetainedHourlyVersions, draft.RetainedHourlyVersions, "小时策略丢失。");
+    Equal(source.RetainedDailyVersions, draft.RetainedDailyVersions, "每日策略丢失。");
+    Equal(source.BackupNotificationMode, draft.BackupNotificationMode, "通知设置丢失。");
+    await ExpectThrowsAsync<InvalidOperationException>(() => GameProfileTransfer.ReadImportDraftAsync(path, new[] { source }), "原设备允许重复导入。");
+    await ExpectThrowsAsync<InvalidOperationException>(() => GameProfileTransfer.ReadImportDraftAsync(path, new[] { draft }), "新设备允许重复导入。");
+    var secondPath = Path.Combine(root, "second.pathecho-game.json");
+    await GameProfileTransfer.ExportAsync(draft, cloud, secondPath);
+    var third = await GameProfileTransfer.ReadImportDraftAsync(secondPath, Array.Empty<GameBackupProfile>());
+    True(third.LinkedBackupProfileIds.Contains(source.Id) && third.LinkedBackupProfileIds.Contains(draft.Id), "第三台设备丢失备份来源链。");
+    await ExpectThrowsAsync<InvalidOperationException>(() => GameProfileTransfer.ReadImportDraftAsync(secondPath, new[] { source }), "关联来源已存在仍重复导入。");
+    var configPath = Path.Combine(root, "configuration.json");
+    var configStore = new JsonConfigurationStore(configPath);
+    await configStore.SaveAsync(new AppConfiguration { GameProfiles = new[] { draft } });
+    True((await configStore.LoadAsync()).GameProfiles.Single().LinkedBackupProfileIds.Contains(source.Id), "重启配置丢失关联。");
+    var saved = await File.ReadAllTextAsync(path);
+    await ExpectThrowsAsync<OperationCanceledException>(() => GameProfileTransfer.ExportAsync(source, cloud, path, new CancellationToken(true)), "取消导出未停止。");
+    Equal(saved, await File.ReadAllTextAsync(path), "取消导出破坏原配置文件。");
+    var invalid = Path.Combine(root, "invalid.json");
+    foreach (var content in new[] { "{", "null", "{}", saved.Replace("\"SchemaVersion\": 1", "\"SchemaVersion\": 99"), saved.Replace("PathEcho.GameProfile", "OtherApp") })
+    {
+        await File.WriteAllTextAsync(invalid, content);
+        await ExpectThrowsAsync<InvalidDataException>(() => GameProfileTransfer.ReadImportDraftAsync(invalid, Array.Empty<GameBackupProfile>()), "无效配置未被拒绝。");
+    }
+    await File.WriteAllTextAsync(invalid, new string('x', 1024 * 1024 + 1));
+    await ExpectThrowsAsync<InvalidDataException>(() => GameProfileTransfer.ReadImportDraftAsync(invalid, Array.Empty<GameBackupProfile>()), "超大配置未被拒绝。");
 }
 
 Task TestLiteInstallerRuntimeDetectionContractAsync()
@@ -1604,7 +1747,7 @@ Task TestGameHistoryAndEditingContractAsync()
     True(windowCode.Contains("QueueHistoryRefresh", StringComparison.Ordinal), "大量历史记录刷新没有合并 UI 更新。");
     True(windowCode.Contains("PrepareSnapshotBrowseAsync(row)", StringComparison.Ordinal), "打开历史版本没有生成独立浏览副本。");
     False(windowCode.Contains("Path.Combine(row.SnapshotDirectory, \"files\")", StringComparison.Ordinal), "界面仍直接打开可串改历史的旧 files 目录。");
-    True(editorCode.Contains("updated with { Id = _existingProfile.Id", StringComparison.Ordinal), "编辑游戏时没有保留原配置 ID。");
+    True(editorCode.Contains("Id = _existingProfile.Id", StringComparison.Ordinal), "编辑游戏时没有保留原配置 ID。");
     True(runtimeCode.Contains("manager.MoveProfileAsync", StringComparison.Ordinal), "编辑单独备份目录时没有迁移现有备份。");
     var snapshotFilesXaml = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "SnapshotFilesWindow.xaml"));
     True(snapshotFilesXaml.Contains("Header=\"文件名\"", StringComparison.Ordinal), "版本文件窗口缺少文件名列。");

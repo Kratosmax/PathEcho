@@ -20,6 +20,10 @@ public sealed record GameBackupProfile
 
     public string? BackupDirectory { get; init; }
 
+    public bool IncludeOtherDeviceBackups { get; init; }
+
+    public IReadOnlyList<Guid> LinkedBackupProfileIds { get; init; } = Array.Empty<Guid>();
+
     public BackupTrigger Triggers { get; init; } = BackupTrigger.ProcessExited;
 
     public TimeSpan ScheduleInterval { get; init; } = TimeSpan.FromHours(1);
@@ -44,6 +48,12 @@ public sealed record GameBackupProfile
 
     public void Validate()
     {
+        if (LinkedBackupProfileIds is null || LinkedBackupProfileIds.Count > 64 ||
+            LinkedBackupProfileIds.Any(id => id == Guid.Empty || id == Id))
+        {
+            throw new InvalidOperationException("关联备份档案 ID 无效或超过 64 个。");
+        }
+
         if (string.IsNullOrWhiteSpace(Name))
         {
             throw new InvalidOperationException("游戏名称不能为空。");
@@ -52,6 +62,11 @@ public sealed record GameBackupProfile
         if (string.IsNullOrWhiteSpace(SaveDirectory))
         {
             throw new InvalidOperationException("游戏存档目录不能为空。");
+        }
+
+        if (IncludeOtherDeviceBackups && string.IsNullOrWhiteSpace(BackupDirectory))
+        {
+            throw new InvalidOperationException("跨设备备份需要设置仅供此游戏使用的单独备份目录。");
         }
 
         if (RetainedVersions < 1)
@@ -104,4 +119,17 @@ public sealed record GameBackupProfile
 
     public string ResolveBackupDirectory(string defaultBackupDirectory) =>
         Path.GetFullPath(string.IsNullOrWhiteSpace(BackupDirectory) ? defaultBackupDirectory : BackupDirectory);
+
+    public bool HasDedicatedBackupDirectory(AppConfiguration configuration)
+    {
+        if (string.IsNullOrWhiteSpace(BackupDirectory))
+        {
+            return false;
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(ResolveBackupDirectory(configuration.DefaultBackupDirectory));
+        return !string.Equals(root, Path.TrimEndingDirectorySeparator(Path.GetFullPath(configuration.DefaultBackupDirectory)), StringComparison.OrdinalIgnoreCase) &&
+            !configuration.GameProfiles.Any(other => other.Id != Id &&
+                string.Equals(root, Path.TrimEndingDirectorySeparator(other.ResolveBackupDirectory(configuration.DefaultBackupDirectory)), StringComparison.OrdinalIgnoreCase));
+    }
 }

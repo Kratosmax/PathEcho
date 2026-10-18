@@ -13,6 +13,7 @@ using Microsoft.Win32;
 using PathEcho.Core.Backup;
 using PathEcho.Core.Models;
 using PathEcho.Core.Restore;
+using PathEcho.Core.Storage;
 using PathEcho.Core.Update;
 using PathEcho.Dialogs;
 using PathEcho.Services;
@@ -188,6 +189,73 @@ public partial class MainWindow : Window
     private async void OnAddGame(object sender, RoutedEventArgs e)
     {
         await AddGameAsync();
+    }
+
+    private async void OnExportGame(object sender, RoutedEventArgs e)
+    {
+        if (GameGrid.SelectedItem is not GameProfileRow row)
+        {
+            return;
+        }
+
+        var fileName = new string(row.Name.Select(character => System.IO.Path.GetInvalidFileNameChars().Contains(character) ? '_' : character).ToArray());
+        var picker = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出游戏配置",
+            Filter = "PathEcho 游戏配置 (*.pathecho-game.json)|*.pathecho-game.json",
+            FileName = fileName + ".pathecho-game.json",
+            AddExtension = true,
+            DefaultExt = ".pathecho-game.json",
+        };
+        if (picker.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        await RunUiActionAsync("正在导出游戏配置", async () =>
+        {
+            await GameProfileTransfer.ExportAsync(row.Definition, _runtime.Configuration.DefaultBackupDirectory, picker.FileName);
+            StatusText.Text = $"已导出 {row.Name} 的配置（不包含存档文件）";
+        });
+    }
+
+    private async void OnImportGame(object sender, RoutedEventArgs e)
+    {
+        var picker = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "导入游戏配置",
+            Filter = "PathEcho 游戏配置 (*.pathecho-game.json)|*.pathecho-game.json|JSON 文件 (*.json)|*.json",
+        };
+        if (picker.ShowDialog(this) == true)
+        {
+            await ImportGameConfigurationAsync(picker.FileName);
+        }
+    }
+
+    private async Task ImportGameConfigurationAsync(string fileName)
+    {
+        GameBackupProfile? draft = null;
+        if (!await RunUiActionAsync("正在读取游戏配置", async () =>
+        {
+            draft = await GameProfileTransfer.ReadImportDraftAsync(fileName, _runtime.Configuration.GameProfiles);
+        }) || draft is null)
+        {
+            return;
+        }
+
+        var dialog = new GameProfileEditorWindow(draft, _runtime.Configuration.DefaultBackupNotification, importing: true) { Owner = this };
+        if (dialog.ShowDialog() != true || dialog.Result is null)
+        {
+            StatusText.Text = "已取消导入，未添加游戏档案";
+            return;
+        }
+
+        await RunUiActionAsync("正在导入游戏配置", async () =>
+        {
+            await _runtime.AddGameProfileAsync(dialog.Result);
+            await _runtime.RefreshHistoryAsync();
+            StatusText.Text = $"已导入 {dialog.Result.Name}，历史已关联导出设备的备份";
+        });
     }
 
     private async Task AddGameAsync(PathEcho.Core.GameCatalog.DiscoveredGame? discoveredGame = null)
@@ -650,11 +718,25 @@ public partial class MainWindow : Window
             var manager = new BackupDirectoryManager();
             var discovered = await manager.DiscoverAsync(dialog.FolderName);
             var imported = 0;
+            var unmatched = 0;
+            var associated = 0;
             foreach (var candidate in discovered)
             {
                 var profile = _runtime.Configuration.GameProfiles.FirstOrDefault(item => item.Id == candidate.ProfileId);
                 if (profile is null)
                 {
+                    if (_runtime.Configuration.GameProfiles.Any(item =>
+                        (item.LinkedBackupProfileIds.Contains(candidate.ProfileId) ||
+                            (item.IncludeOtherDeviceBackups && item.HasDedicatedBackupDirectory(_runtime.Configuration))) &&
+                        string.Equals(System.IO.Path.TrimEndingDirectorySeparator(item.ResolveBackupDirectory(_runtime.Configuration.DefaultBackupDirectory)),
+                            System.IO.Path.GetDirectoryName(candidate.ProfileDirectory), StringComparison.OrdinalIgnoreCase)))
+                    {
+                        associated++;
+                    }
+                    else
+                    {
+                        unmatched++;
+                    }
                     continue;
                 }
 
@@ -670,7 +752,11 @@ public partial class MainWindow : Window
             }
 
             await _runtime.RefreshHistoryAsync();
-            StatusText.Text = $"发现 {discovered.Count} 组备份，已导入 {imported} 组";
+            StatusText.Text = $"发现 {discovered.Count} 组备份，已导入 {imported} 组，已关联 {associated} 组";
+            if (unmatched > 0)
+            {
+                ShowError($"有 {unmatched} 组备份不属于本机游戏 ID。跨设备使用时，请编辑对应游戏，将单独备份目录设为该游戏的云盘目录，并勾选“识别此目录内其他设备的备份”；历史将自动显示，无需导入。不要选择混放多个游戏的目录。");
+            }
         });
     }
 
@@ -860,6 +946,7 @@ public partial class MainWindow : Window
     {
         var selected = GameGrid.SelectedItem is GameProfileRow;
         EditGameButton.IsEnabled = selected;
+        ExportGameButton.IsEnabled = selected;
         DeleteGameButton.IsEnabled = selected;
     }
 

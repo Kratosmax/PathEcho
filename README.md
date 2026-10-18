@@ -1,6 +1,6 @@
 # PathEcho
 
-当前发布版本：`0.5.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
+当前版本：`0.6.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
 
 <img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
 
@@ -12,10 +12,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.5.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.5.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.5.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.5.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.6.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.6.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.6.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.6.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 
@@ -43,6 +43,20 @@ Windows 11 build 22621 及以上会尝试全客户区 Acrylic 系统材质；DWM
 编辑游戏时若改变了该游戏的单独备份目录，PathEcho 会先迁移并校验现有版本，再保存配置；保存失败会尝试回滚迁移。仅修改名称、触发方式、进程或保留数量时，不移动已有备份。
 
 自动备份成功或最终失败时会显示无焦点置顶小窗，手动备份不会重复弹窗。连续相同错误会合并计数，通知队列最多保留 4 条并在 5 秒后自动消失；坐标始终限制在所选显示器工作区内。
+
+### OneDrive 跨设备游戏存档
+
+首次设置新设备时，可在 A 电脑的“游戏存档”页选中游戏，点击“导出配置”保存 `.pathecho-game.json`，再在 B 电脑点击“导入配置”。导入会回填名称、路径提示、触发规则、保留策略和通知设置；请在确认窗口修改 B 的本地存档、云盘和游戏程序路径，点击“确认导入”后才会保存和启用。取消不添加档案，已导入的来源不能重复添加。配置文件不包含实际存档或全局网络设置。
+
+导入会为 B 创建独立档案 ID，同时按原档案 ID 关联云盘中的历史；不需要重新勾选扫描整个目录的选项，也无需把原有备份移到新的 ID 目录。继续从 B 导出到 C 时会保留此前的关联。按 ID 关联可用于多个游戏共用的备份根目录，回档仍使用本机存档路径；导入配置不会自动回档。
+
+两台电脑分别添加同一游戏会生成不同的档案 ID。跨设备使用时，在两端编辑游戏，将“单独备份目录”指向同一个云盘游戏目录（例如 `OneDrive\gamesave\SolCesto`），并勾选“识别此目录内其他设备的备份”。选择的是包含各档案 ID 子目录的游戏目录，不是某个 ID、`snapshots` 或 `objects` 子目录。两端的本地存档路径可以不同。
+
+该目录必须仅用于一个游戏，不能等同于全局默认备份目录，也不能供多个本机游戏共用；程序不会凭游戏名称猜测关联关系。已有 `0.5.0` 备份不需要转换或导入。各档案仍独立写入、去重和清理，关联历史不会把另一档案迁移或删除。
+
+启用后每 5 秒检查历史；清单已到但对象缺失或大小不符时显示“等待云同步”，并禁用打开和回档。对象到齐后恢复操作入口，回档时仍逐文件校验 SHA-256。尚未写完的清单会在后续轮次重试，不影响其他完整版本显示。云盘仅联机文件需要 OneDrive 正常联网才能在回档时下载内容；文件存在和大小匹配不代表已经通过内容校验。
+
+在 B 电脑“版本历史”选择“关联备份”并点击“回档”，目标是 B 电脑配置的本地存档目录。自动刷新不会自动覆盖存档；开始游戏前需自行确认云盘同步完成并手动回档。OneDrive 本身的同步延迟、离线或冲突副本仍需由云盘处理，PathEcho 不会代替 OneDrive 传输文件。
 
 ### 自动更新
 

@@ -129,27 +129,66 @@ public sealed class SnapshotStore : IBackupSnapshotStore
     public async Task<IReadOnlyList<SnapshotVersion>> ListAsync(
         Guid profileId,
         string backupDirectory,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool includeOtherProfiles = false)
     {
-        var snapshotsRoot = Path.Combine(
-            SafePath.NormalizeDirectory(backupDirectory, "备份目录不能为空。"),
-            profileId.ToString("N"),
-            "snapshots");
-        if (!Directory.Exists(snapshotsRoot))
+        var backupRoot = SafePath.NormalizeDirectory(backupDirectory, "备份目录不能为空。");
+        if (!Directory.Exists(backupRoot))
         {
             return Array.Empty<SnapshotVersion>();
         }
 
         var versions = new List<SnapshotVersion>();
-        foreach (var directory in EnumerateSnapshotDirectories(snapshotsRoot))
+        var profileRoots = includeOtherProfiles
+            ? Directory.EnumerateDirectories(backupRoot)
+                .Where(path => Guid.TryParseExact(Path.GetFileName(path), "N", out _)).ToArray()
+            : new[] { Path.Combine(backupRoot, profileId.ToString("N")) };
+        foreach (var profileRoot in profileRoots)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            versions.Add(new SnapshotVersion(
-                directory,
-                await SnapshotContent.ReadManifestAsync(directory, cancellationToken).ConfigureAwait(false)));
+            var snapshotsRoot = Path.Combine(profileRoot, "snapshots");
+            if (!Directory.Exists(snapshotsRoot))
+            {
+                continue;
+            }
+
+            foreach (var directory in EnumerateSnapshotDirectories(snapshotsRoot))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var manifest = await SnapshotContent.ReadManifestAsync(directory, cancellationToken).ConfigureAwait(false);
+                    if (manifest.Files is null || manifest.Files.Any(entry => entry is null || string.IsNullOrEmpty(entry.Sha256)) ||
+                        manifest.ProfileId != Guid.ParseExact(Path.GetFileName(profileRoot), "N"))
+                    {
+                        continue;
+                    }
+
+                    versions.Add(new SnapshotVersion(directory, manifest)
+                    {
+                        IsContentAvailable = manifest.Files.All(entry => HasContent(directory, entry)),
+                    });
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
+                {
+                    // Cloud sync can deliver the manifest last, partially, or before its objects.
+                    // Retry this version on the next refresh without hiding unrelated versions.
+                }
+            }
         }
 
         return versions.OrderByDescending(version => version.Manifest.CreatedAtUtc).ToArray();
+    }
+
+    private static bool HasContent(string directory, SnapshotFileEntry entry)
+    {
+        try
+        {
+            return new FileInfo(SnapshotContent.ResolveFile(directory, entry)).Length == entry.Length;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return false;
+        }
     }
 
     private async Task<IReadOnlyList<SnapshotFileEntry>> BuildCurrentEntriesAsync(

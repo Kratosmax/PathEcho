@@ -35,17 +35,21 @@ public partial class GameProfileEditorWindow : Window
 
     public GameProfileEditorWindow(
         GameBackupProfile profile,
-        BackupNotificationSettings? defaultNotificationSettings = null)
+        BackupNotificationSettings? defaultNotificationSettings = null,
+        bool importing = false)
     {
         _existingProfile = profile;
         InitializeComponent();
         WindowBackdrop.Attach(this);
-        Title = "编辑游戏存档";
-        TitleText.Text = "编辑游戏存档";
-        SubmitButton.Content = "保存";
+        Title = importing ? "导入游戏配置" : "编辑游戏存档";
+        TitleText.Text = Title;
+        SubmitButton.Content = importing ? "确认导入" : "保存";
+        ImportHint.Visibility = importing ? Visibility.Visible : Visibility.Collapsed;
+        LinkedBackupHint.Visibility = profile.LinkedBackupProfileIds.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         NameBox.Text = profile.Name;
         SavePathBox.Text = profile.SaveDirectory;
         BackupPathBox.Text = profile.BackupDirectory ?? string.Empty;
+        OtherDevicesCheck.IsChecked = profile.IncludeOtherDeviceBackups;
         ScheduledCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.Scheduled);
         ImportantCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.ImportantFileChanged);
         ChangedCheck.IsChecked = profile.Triggers.HasFlag(BackupTrigger.ChangedFiles);
@@ -154,6 +158,7 @@ public partial class GameProfileEditorWindow : Window
                 Name = NameBox.Text.Trim(),
                 SaveDirectory = SavePathBox.Text.Trim(),
                 BackupDirectory = string.IsNullOrWhiteSpace(BackupPathBox.Text) ? null : BackupPathBox.Text.Trim(),
+                IncludeOtherDeviceBackups = OtherDevicesCheck.IsChecked == true,
                 Triggers = triggers,
                 ScheduleInterval = TimeSpan.FromMinutes(ParsePositive(ScheduleBox.Text, "定时间隔")),
                 MinimumBackupInterval = TimeSpan.FromMinutes(ParseNonNegative(MinimumBox.Text, "最低间隔")),
@@ -172,7 +177,12 @@ public partial class GameProfileEditorWindow : Window
             };
             Result = _existingProfile is null
                 ? updated
-                : updated with { Id = _existingProfile.Id, IsEnabled = _existingProfile.IsEnabled };
+                : updated with
+                {
+                    Id = _existingProfile.Id,
+                    IsEnabled = _existingProfile.IsEnabled,
+                    LinkedBackupProfileIds = _existingProfile.LinkedBackupProfileIds,
+                };
             Result.Validate();
             _unsavedChanges.MarkSaved();
             DialogResult = true;
@@ -227,6 +237,7 @@ public partial class GameProfileEditorWindow : Window
         NameBox.Text,
         SavePathBox.Text,
         BackupPathBox.Text,
+        OtherDevicesCheck.IsChecked,
         ScheduledCheck.IsChecked,
         ImportantCheck.IsChecked,
         ChangedCheck.IsChecked,

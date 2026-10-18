@@ -17,11 +17,12 @@ dotnet --version
 
 ## 当前快照
 
-- 最后核验：2026-08-26，Asia/Shanghai。
-- 版本：`0.5.0` 正式版，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。GitHub latest 已核验指向 `v0.5.0`。
+- 最后本地及 GitHub 核验：2026-10-19，Asia/Shanghai。
+- 当前工作：基于 `main` / `68320c8` 完成跨设备历史修复与游戏配置导入导出；用户已授权验证后提交、推送并发布。准备通过现有 GitHub Actions 发布 `v0.6.0`，发布完成后追加线上验证记录。
+- 版本：`0.6.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。本次发布前 GitHub latest 实际仍为 `v0.5.0`。
 - 分支：`main`；正式标签 `v0.5.0` 指向功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`，历史正式标签保持固定。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
-- 当前发布代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；`main` 仅在其后追加本发布证据文档提交，产品代码与标签一致。
+- 上一正式代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；本轮 `0.6.0` 叠加在后续文档提交 `68320c8` 上。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
@@ -76,7 +77,7 @@ dotnet --version
 
 ## 当前待办
 
-- 当前无已授权但未完成的发布任务；等待用户后续需求。
+- `0.6.0` 本地功能、41 项回归、真实 WPF 和四包构建已验证；继续提交、推送标签，等待 Actions 后核验线上八项资产、签名清单、latest 和旧客户端升级链。用户已明确只自动刷新历史、手动回档。
 - `v0.5.0` 已公开，不得覆盖同版本资产；后续修复必须递增版本并保留现有标签和 Release 审计记录。
 - `v0.3.0` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.1` 一次；旧客户端无法通过新包修复自身正在执行的旧更新器代码。
 - GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
@@ -96,6 +97,30 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-10-19 `0.6.0` 发布前本地验证：
+
+- 游戏存档页新增单游戏 `.pathecho-game.json` 导入/导出；JSON 带产品格式标识、schema 和档案信息，限制 1 MiB，导出原子替换；不包含存档内容、全局更新线路或秘密配置。导入先打开原编辑器确认本机路径，取消不落盘，重复来源、无效或超大文件拒绝导入。
+- 导入创建新的本机写入 ID，通过 `LinkedBackupProfileIds` 精确关联来源历史；跨设备多次转导保留已有来源，避免直接复用旧 ID 的写入/清理身份。按 ID 关联可读取共用备份根目录，原有扫描所有 ID 的可选方式仍要求单游戏专用目录。编辑档案保留关联列表。
+- `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误；`dotnet run --project tests/PathEcho.SmokeTests/PathEcho.SmokeTests.csproj -c Release --no-build`：41/41；`dotnet format PathEcho.sln --no-restore --verify-no-changes`、`git diff --check` 通过。
+- 隔离真实 WPF 宿主 `temp/cross-device-verification/UiProbe.csproj` 已运行：实际导入确认/取消、持久化、来源历史关联、无选中时禁用导出、选中启用导出、导入不改存档、等待云同步转可用、手动回档均通过；`result.json` 为 `success:true`。原生 WPF 无法使用 Playwright，采用真实 WPF 控件事件与截图；常用/最小窗口、空数据和已选中状态已人工查看。
+- `build/Build-Release.ps1` 已本地生成 Lite/Full ZIP 与 Setup，两个包内更新器预检均返回 0，Inno Setup 6.7.3 编译成功；本地没有正式私钥，使用公钥走到签名阶段后按预期拒绝签名，正式清单只能由现有 Actions Secret 生成。日志在 `temp/release-0.6.0-verification/local-four-pack.log`。
+- 上一正式版原始 Lite ZIP 的 SHA-256 为 `4FDE46880EA95D1CF4E2F0340FBA2C3AC2A35B4094ADC148F80AE71D10BB2A7D`，Full ZIP 为 `E8E350C6FB452AD48E96E4EED3996FDB52D18501DFBB90D5C7673A53B76458DE`。实际加载其中原始 `PathEcho.Core.dll 0.5.0.0` 验证候选 Lite/Full 包结构与版本通过；两个原始更新器分别验证候选包的哈希、版本、通道和结构，退出码均为 0。
+- 本地 Lite 预览（非正式 Release）：`temp/preview-v0.6.0/PathEcho-0.6.0-Lite.zip`，614095 字节，SHA-256 `AA0802F0D572C92F78FF20F8D0F09B2B628DE065E50C682D2A02CEDF43AE7AC6`；包内主程序预览截图 `temp/release-0.6.0-verification/packaged-games.png`，退出码 0。
+- 本轮完整变更文件：`Directory.Build.props`、`README.md`、`RELEASE_NOTES_CURRENT.md`、`CODEX_PROGRESS.md`、`src/PathEcho.Core/Storage/GameProfileTransfer.cs`、`src/PathEcho.Core/Models/GameBackupProfile.cs`、`src/PathEcho.Core/Backup/SnapshotManifest.cs`、`src/PathEcho.Core/Backup/SnapshotStore.cs`、`src/PathEcho/Services/PathEchoRuntime.cs`、`src/PathEcho/MainWindow.xaml`、`src/PathEcho/MainWindow.xaml.cs`、`src/PathEcho/Dialogs/GameProfileEditorWindow.xaml`、`src/PathEcho/Dialogs/GameProfileEditorWindow.xaml.cs`、`tests/PathEcho.SmokeTests/Program.cs`。
+- 待发布后验证：线上正式签名与八项资产、latest 路由、旧客户端真实下载/更新链；真实双机 OneDrive 传输、按需文件下载与云盘冲突副本仍需要实际设备验收。
+
+2026-10-19 跨设备历史修复（本地，未发布）：
+
+- 原因证据：`GameBackupProfile.Id` 默认为随机 GUID；原 `SnapshotStore.ListAsync` 只读本机 ID 子目录，原“发现已有备份”跳过未知 ID，运行时未轮询云端历史。该结论来自源码；没有读取或修改真实用户配置、存档或云盘文件。
+- 新增显式 `IncludeOtherDeviceBackups` 开关，要求单个游戏专用备份目录，阻止与全局目录或其他游戏共用；旧配置默认关闭。两端 GUID 不同时合并展示历史，回档目标继续使用本机档案路径；只清理本档案快照，不清理关联档案。
+- 开启关联后每 5 秒轮询；缺少对象或大小不符标记“等待云同步”并禁用打开/回档，半写清单逐版本隔离并重试。状态无变化不重建历史集合，刷新串行、退出取消并等待轮询；回档仍由用户手动选择，现有 SHA-256 校验与事务恢复保持生效。
+- 修改文件完整列表：`README.md`、`CODEX_PROGRESS.md`、`src/PathEcho.Core/Backup/SnapshotManifest.cs`、`src/PathEcho.Core/Backup/SnapshotStore.cs`、`src/PathEcho.Core/Models/GameBackupProfile.cs`、`src/PathEcho/Dialogs/GameProfileEditorWindow.xaml`、`src/PathEcho/Dialogs/GameProfileEditorWindow.xaml.cs`、`src/PathEcho/MainWindow.xaml`、`src/PathEcho/MainWindow.xaml.cs`、`src/PathEcho/Services/PathEchoRuntime.cs`、`tests/PathEcho.SmokeTests/Program.cs`。
+- `dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal`：0 警告、0 错误；`dotnet run --project tests/PathEcho.SmokeTests/PathEcho.SmokeTests.csproj -c Release --no-build`：40/40；`dotnet format PathEcho.sln --no-restore --verify-no-changes`、`git diff --check` 通过。
+- 原生 WPF 无法通过 Playwright 操控；使用隔离 WPF 宿主运行实际历史轮询、绑定和回档服务，验证清单先到、文件后到、自动从等待转可用、刷新不覆盖本地存档、手动跨 ID 回档以及编辑器开关回填。`temp/cross-device-verification/result.json` 为 `success:true`；真实渲染截图覆盖等待、可用、编辑页和 920×620 最小窗。最小窗通过水平滚动查看右侧操作列。
+- 本地 Lite 预览：`temp/preview-cross-device/PathEcho-0.5.0-Lite.zip`，605099 字节，SHA-256 `7A08943C86F964ED115D4FF5E6CFF57D36C912FD2B6B2857AA742739210D085C`；包内更新器 `--verify-only` 返回 0，包内主程序预览启动、编辑页截图及退出返回 0。
+- 重跑记录、测试日志、UI 宿主源码、截图、包验证和补丁见 `temp/cross-device-verification/`。这些是本地忽略产物，尚不能跨设备从 Git 获取。
+- 未验证：两台真实电脑之间的 OneDrive 传输、按需文件下载和 OneDrive 冲突副本；存在且大小匹配只用于开放操作入口，内容损坏仍须由回档校验拒绝。专用目录若混入其他游戏历史会错误关联，需用户按游戏分目录；不根据名称猜测。
 
 2026-08-26 `v0.5.0` 发布后实际通过：
 
