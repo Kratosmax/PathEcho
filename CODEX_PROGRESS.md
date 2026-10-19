@@ -17,12 +17,12 @@ dotnet --version
 
 ## 当前快照
 
-- 最后本地及 GitHub 核验：2026-10-19，Asia/Shanghai。
-- 当前工作：基于 `main` / `68320c8` 完成跨设备历史修复与游戏配置导入导出；用户已授权验证后提交、推送并发布。准备通过现有 GitHub Actions 发布 `v0.6.0`，发布完成后追加线上验证记录。
-- 版本：`0.6.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。本次发布前 GitHub latest 实际仍为 `v0.5.0`。
-- 分支：`main`；正式标签 `v0.5.0` 指向功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`，历史正式标签保持固定。
+- 最后本地及 GitHub 核验：2026-10-20，Asia/Shanghai（本轮独立重跑门禁并联网核验线上）。
+- 当前工作：`v0.6.0` 已经通过 GitHub Actions 正式发布并完成线上核验；本轮补齐发布后验证记录、修正本文过期条目，并把回归测试的更新器失败日志改为隔离目录。真机双机 OneDrive 验收仍待用户执行。
+- 版本：`0.6.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。GitHub latest 已指向 `v0.6.0`。
+- 分支：`main`，工作区干净且与 `origin/main` 一致（无 ahead/behind）。正式标签 `v0.6.0` 指向 `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`；历史正式标签保持固定，不得覆盖。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
-- 上一正式代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；本轮 `0.6.0` 叠加在后续文档提交 `68320c8` 上。
+- 上一正式代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；`0.6.0` 为其后的 `68320c8` 文档提交加 `9b6bd02` 功能提交。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
@@ -77,10 +77,11 @@ dotnet --version
 
 ## 当前待办
 
-- `0.6.0` 本地功能、41 项回归、真实 WPF 和四包构建已验证；继续提交、推送标签，等待 Actions 后核验线上八项资产、签名清单、latest 和旧客户端升级链。用户已明确只自动刷新历史、手动回档。
-- `v0.5.0` 已公开，不得覆盖同版本资产；后续修复必须递增版本并保留现有标签和 Release 审计记录。
+- `v0.6.0` 已发布并完成线上核验；真机双机 OneDrive 传输、按需文件下载和云盘冲突副本仍需要实际设备验收，本地无法替代。
+- **远程游戏识别目录当前线上不可用**：客户端默认地址 `https://raw.githubusercontent.com/Kratosmax/PathEcho/main/config/game-catalog.json` 实际返回 404，仓库 `main` 只跟踪 `config/game-catalog.source.json`，签名产物从未提交。`Sign game catalog` 工作流历史上只运行过 1 次（Run `32617637717`，2026-08-23，提交 `ac4e9be`），`Sign catalog` 步骤失败、`Commit signed catalog` 被跳过，因此与 `v0.2.3` 未发布同源。当前 `main` 的 ReleaseTool 已实测可编译（0 警告 0 错误），`game-catalog.source.json` 的 `revision` 仍为 1 且输出不存在，重新触发该工作流（`workflow_dispatch` 或修改源文件）即可产出；执行需要用户明确授权，属独立外部动作。在此之前智能识别只能明确报错，不会有可信缓存。
+- 本机 Git 全局配置实际为 `http.https://github.com.proxy=http://127.0.0.1:10808`（旧记录写的 10809 已过期）。实测：`api.github.com` 直连可用，`github.com/.../releases/download` 与 `raw.githubusercontent.com` 直连超时，旧客户端自动更新的下载环节在当前网络必须依赖应用内 URL 前缀线路或代理。只按命令级临时覆盖处理，不静默修改用户全局配置。
+- `v0.5.0` 及更早正式版本已公开，不得覆盖同版本资产；后续修复必须递增版本并保留现有标签和 Release 审计记录。
 - `v0.3.0` 及更早版本若已出现文件占用或下载后退出无后续，需要手动覆盖安装 `v0.3.1` 一次；旧客户端无法通过新包修复自身正在执行的旧更新器代码。
-- GitHub 连接若受全局失效代理 `http.https://github.com.proxy=http://127.0.0.1:10809` 影响，只能命令级临时覆盖，不应静默修改用户全局配置。
 
 ## 关键入口
 
@@ -97,6 +98,22 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-10-20 接手校准、`v0.6.0` 发布后核验与测试日志隔离（本轮实际执行）：
+
+- 接手校准：`git status --short` 干净、`main` 与 `origin/main` 一致、`git diff --check` 无错误；`Directory.Build.props` 为 `0.6.0`；本机 SDK `8.0.426`；`dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal` 0 警告 0 错误；SmokeTests 41/41；`dotnet format PathEcho.sln --no-restore --verify-no-changes` 通过。本文原先“准备发布 v0.6.0”“latest 仍为 v0.5.0”两条与线上不符，已按较新证据修正。
+- 线上发布核验：标签 `v0.6.0` → `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`（注释标签）；Actions Run `39149201611` `completed/success`；Release `416592294` 非草稿非预发布，`releases/latest` 已指向 `v0.6.0`；8 个资产全部 `uploaded`。
+- 8 项资产实际取回并逐项比对：`SHA256SUMS.txt` 7 条与 Release API digest 及本地重算全部一致（该文件本地重算 SHA-256 `4651c6d03197033457a3168fb310d62f0e0457d3294f5b21ffc6b5ec11e567fa`，恰与其自身 digest 相同）。`update.json` 与 `update-lite.json` 逐字节一致，均为 3322 字节、SHA-256 `779b9ba5470dbde190411d90bed88c66a7b3384581e4a94ef977fb17340d7201`。
+- 独立验签：用仓库内置正式公钥与产品自带的 `UpdateManifestVerifier` 在本机临时小程序中实际验证线上 `update.json`、`update-lite.json`，结果均为 `SIGNATURE_OK`，版本 `0.6.0`、通道 `Lite`、`PackageSize 613987`、SHA-256 `E46D5C62DEB75B0FC7E03BB5D7B86DD9BC0736C53F3E9AFE99B4DD79C6640D03`，与线上 Lite ZIP 资产完全匹配。临时验证工程仅存在于忽略的 `temp`，未进入源码或 Release。
+- Release 正文与 `RELEASE_NOTES_CURRENT.md` 一致，仅含 `0.6.0` 变更，无历史章节。
+- 本机安装副本已为 `0.6.0`，程序集版本 `0.6.0+9b6bd0276d7e8816c1504c8993e09f9075dabb8d`。
+- 未在本轮执行：正式包体的真实下载与旧客户端完整升级链（本机网络对 `github.com/releases/download` 与 `raw.githubusercontent.com` 直连超时）；发布后升级链沿用 `v0.5.0` 时已通过的同一事务模型，如需再次确证需在可用网络下重跑。
+- 游戏存档跨设备的真机双机 OneDrive 验证仍未执行，继续作为待办保留。
+- 测试日志隔离修复（改动源码行为，属功能变更）：`src/PathEcho.Updater/Program.cs` 新增可选 `--log-directory` 参数，仅在显式传入时改变失败日志位置，未传时继续写 `%LocalAppData%\PathEcho\Logs`，生产与 `build/Build-Release.ps1` 的包内预检调用均未改动默认行为；`TryWriteFailureLog` 改为接收该目录。`tests/PathEcho.SmokeTests/Program.cs` 的两处真实更新器进程调用（路径穿越拒绝、错误哈希交接）改为传入 `temp\smoke\<运行 GUID>` 下的隔离目录，并新增断言：隔离目录存在 `update-failures.log`、内容包含越界路径诊断、不意外触发 `update-failures.previous.log` 轮转；交接契约的源码文本断言同步更新。
+- 隔离验证证据：修改前真实 `update-failures.log` 为 26661 字节、SHA-256 `3A5F7D3ED4CEFB1E75D6C3031C2B6AAC77765471F9A066B27FA04A00FB3435D9`；重跑 Release 构建与 41/41 SmokeTests 后该文件哈希与字节数完全不变，证明回归测试不再写入真实用户日志目录。另用绝对路径直接启动包外更新器复核：退出码 1，隔离目录生成 410 字节日志并包含越界路径记录。
+- 本地 Lite 预览包（非正式 Release，沿用 `0.6.0` 仅供验收）：`temp/preview-log-isolation/PathEcho-0.6.0-Lite.zip`，614197 字节，SHA-256 `26688A9688EB6C04947D0D31D7EF1A71F0A275201A3B75A005EAF745297F7F39`；包内 `version.txt`/`channel.txt` 为 `0.6.0`/`Lite`。包内更新器对自身包的 `--verify-only` 预检返回 0；对含 `../escape.txt` 的恶意包返回 1 且把失败日志写入指定隔离目录（410 字节），未触碰真实用户日志。
+- 本文尾部原有一行“当前正式版本：`0.5.0`”追加在维护章节之后，与版本源矛盾且违反易变事实分节原则，已删除；版本号一律以 `Directory.Build.props` 与“当前快照”为准。
+- 本轮改动文件：`src/PathEcho.Updater/Program.cs`、`tests/PathEcho.SmokeTests/Program.cs`、`CODEX_PROGRESS.md`。截至收尾仅为本地工作区改动，未提交、未推送、未打标签。
 
 2026-10-19 `0.6.0` 发布前本地验证：
 
@@ -260,8 +277,9 @@ powershell -ExecutionPolicy Bypass -File build\Build-Release.ps1 -PrivateKeyPath
 
 ## 维护
 
-每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。
-> 当前正式版本：`0.5.0`。`v0.2.3` 因 ReleaseTool 编译失败未发布，历史发布记录保持不变。
+每次交付前更新校准时间、工作区状态、实际测试、产物、线上核验、阻塞和下一步。删除失效信息，不记录私钥、令牌、用户数据、日志正文或设备专属绝对路径。用 `git diff --check`、`git status --short`、版本源、测试和 GitHub API 独立校准。易变的版本与发布状态只记录在“当前快照”和“验证证据”，本维护章节不写版本号。
+
+`0.2.3` 从未发布：其 `Sign game catalog` 因 ReleaseTool 在该提交编译失败而中断，历史发布记录保持不变。
 
 `0.2.8` 本地候选验证：更新交接改用落盘握手，更新器全程持有独占锁，普通启动只瞬时探测更新事务以保留原有单实例唤醒；安装目录移动、回滚、卸载器保留和 launcher 复制使用有限文件占用重试并报告阶段/路径，失败写入独立轮转日志，半成品与过期缓存可清理。Release 与 ReleaseTool 构建均为 0 警告、0 错误，SmokeTests 27/27、`dotnet format --verify-no-changes` 与 `git diff --check` 通过。Lite 预览包 `temp/preview-0.2.8-final/PathEcho-0.2.8-Lite.zip` 为 527726 字节，SHA-256 `19FDB471A8D585F1291F9BCE1DF347032A9ACDBE86A38D7B63DE21626F2D6883`；包内新更新器与 `v0.2.7` 原始更新器的版本/通道/哈希/结构预检均返回 0。1180×760 真实 WPF 截图位于 `temp/preview-0.2.8-final/main-window.png`，进程退出码 0。最终更新器在隔离安装副本中面对 1.2 秒独占文件仍完成替换、ready 和备份清理，退出码 0、事务残留 0；后续正式发布状态以当前快照为准。
 
