@@ -1470,9 +1470,18 @@ async Task TestUpdaterPackageValidationAsync()
     CreateUpdatePackage(valid, false);
     CreateUpdatePackage(malicious, true);
 
-    Equal(0, await RunUpdaterValidationAsync(valid), "合法更新包未通过预检。");
-    True(await RunUpdaterValidationAsync(malicious) != 0, "路径穿越更新包被错误接受。");
+    var failureLogDirectory = Path.Combine(root, "isolated-logs");
+    Equal(0, await RunUpdaterValidationAsync(valid, failureLogDirectory), "合法更新包未通过预检。");
+    True(await RunUpdaterValidationAsync(malicious, failureLogDirectory) != 0, "路径穿越更新包被错误接受。");
     False(File.Exists(Path.Combine(root, "escape.txt")), "恶意更新包在目标外写入了文件。");
+    var isolatedLog = Path.Combine(failureLogDirectory, "update-failures.log");
+    True(File.Exists(isolatedLog), "更新器失败日志没有写入指定的隔离目录。");
+    True(
+        (await File.ReadAllTextAsync(isolatedLog)).Contains("越界路径", StringComparison.Ordinal),
+        "隔离目录中的失败日志缺少路径穿越诊断内容。");
+    False(
+        File.Exists(Path.Combine(failureLogDirectory, "update-failures.previous.log")),
+        "预检失败意外触发了日志轮转。");
 }
 
 Task TestUpdateRoutePlanningAsync()
@@ -1618,10 +1627,10 @@ static void CreateUpdatePackage(string path, bool malicious)
     }
 }
 
-async Task<int> RunUpdaterValidationAsync(string package)
-    => await RunUpdaterProcessAsync(package, null, null);
+async Task<int> RunUpdaterValidationAsync(string package, string? failureLogDirectory = null)
+    => await RunUpdaterProcessAsync(package, null, null, failureLogDirectory);
 
-async Task<int> RunUpdaterProcessAsync(string package, string? expectedHash, string? resultPath)
+async Task<int> RunUpdaterProcessAsync(string package, string? expectedHash, string? resultPath, string? failureLogDirectory = null)
 {
     var updater = Path.Combine(
         repositoryRoot,
@@ -1649,6 +1658,12 @@ async Task<int> RunUpdaterProcessAsync(string package, string? expectedHash, str
     })
     {
         start.ArgumentList.Add(argument);
+    }
+
+    if (failureLogDirectory is not null)
+    {
+        start.ArgumentList.Add("--log-directory");
+        start.ArgumentList.Add(failureLogDirectory);
     }
 
     if (resultPath is not null)
@@ -1680,7 +1695,8 @@ async Task TestUpdateHandoffContractAsync()
 
     var updater = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho.Updater", "Program.cs"));
     True(updater.Contains("TryWriteResult(resultPath, \"failed\"", StringComparison.Ordinal), "更新器失败时没有持久化结果。");
-    True(updater.Contains("TryWriteFailureLog(exception)", StringComparison.Ordinal), "更新失败在结果消费后没有保留诊断日志。");
+    True(updater.Contains("TryWriteFailureLog(exception, failureLogDirectory)", StringComparison.Ordinal), "更新失败在结果消费后没有保留诊断日志。");
+    True(updater.Contains("\"log-directory\"", StringComparison.Ordinal), "更新器没有支持把失败日志重定向到隔离目录。");
     True(updater.Contains("UpdateFileOperation.RetryAsync(\"备份当前安装目录\"", StringComparison.Ordinal), "安装目录替换没有处理短暂文件占用。");
     True(updater.Contains("Directory.SetCurrentDirectory(AppContext.BaseDirectory)", StringComparison.Ordinal), "更新器没有主动离开待移动的安装目录。");
     True(updater.Contains("UpdateTransactionGate.UpdaterMutexName", StringComparison.Ordinal), "并发更新器之间没有互斥。");
@@ -1716,11 +1732,18 @@ async Task TestUpdateHandoffContractAsync()
     var package = Path.Combine(testRoot, "handoff-package.zip");
     var resultPath = Path.Combine(testRoot, "update-result.json");
     CreateUpdatePackage(package, false);
-    var exitCode = await RunUpdaterProcessAsync(package, new string('0', 64), resultPath);
+    var exitCode = await RunUpdaterProcessAsync(
+        package,
+        new string('0', 64),
+        resultPath,
+        Path.Combine(testRoot, "handoff-logs"));
     True(exitCode != 0, "错误哈希没有让真实更新器失败。");
     True(File.Exists(resultPath), "真实更新器失败后没有写入结果文件。");
     using var result = JsonDocument.Parse(await File.ReadAllTextAsync(resultPath));
     Equal("failed", result.RootElement.GetProperty("Status").GetString() ?? string.Empty, "更新失败结果状态无效。");
+    True(
+        File.Exists(Path.Combine(testRoot, "handoff-logs", "update-failures.log")),
+        "真实更新器失败日志没有写入隔离目录。");
 }
 
 Task TestReleasePackageVerificationContractAsync()

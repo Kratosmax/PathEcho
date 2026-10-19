@@ -6,6 +6,7 @@ using PathEcho.Core.Update;
 
 string? resultPath = null;
 string? target = null;
+string? failureLogDirectory = null;
 var installValidated = false;
 var parentExited = false;
 UpdateTransactionGate? updaterGate = null;
@@ -14,6 +15,10 @@ try
     var options = ParseArguments(args);
     resultPath = options.TryGetValue("result", out var configuredResultPath)
         ? Path.GetFullPath(configuredResultPath)
+        : null;
+    failureLogDirectory = options.TryGetValue("log-directory", out var configuredLogDirectory)
+        && !string.IsNullOrWhiteSpace(configuredLogDirectory)
+        ? Path.GetFullPath(configuredLogDirectory)
         : null;
     var package = RequirePath(options, "package");
     var verifyOnly = options.TryGetValue("verify-only", out var verifyOnlyValue) && bool.Parse(verifyOnlyValue);
@@ -82,7 +87,7 @@ try
 catch (Exception exception)
 {
     TryWriteResult(resultPath, "failed", exception.Message);
-    TryWriteFailureLog(exception);
+    TryWriteFailureLog(exception, failureLogDirectory);
     if (installValidated &&
         parentExited &&
         target is not null &&
@@ -425,11 +430,11 @@ static void TryDeleteTree(string path)
     }
 }
 
-static void TryWriteFailureLog(Exception exception)
+static void TryWriteFailureLog(Exception exception, string? configuredLogDirectory)
 {
     try
     {
-        var logRoot = Path.Combine(
+        var logRoot = configuredLogDirectory ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PathEcho",
             "Logs");
