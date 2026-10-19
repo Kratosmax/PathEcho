@@ -20,7 +20,7 @@ dotnet --version
 - 最后本地及 GitHub 核验：2026-10-20，Asia/Shanghai（本轮独立重跑门禁并联网核验线上）。
 - 当前工作：`v0.6.0` 已经通过 GitHub Actions 正式发布并完成线上核验；本轮补齐发布后验证记录、修正本文过期条目，并把回归测试的更新器失败日志改为隔离目录。真机双机 OneDrive 验收仍待用户执行。
 - 版本：`0.6.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。GitHub latest 已指向 `v0.6.0`。
-- 分支：`main`，工作区干净且与 `origin/main` 一致（无 ahead/behind）。正式标签 `v0.6.0` 指向 `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`；历史正式标签保持固定，不得覆盖。
+- 分支：`main`；本轮接续修复已推送到 `origin/main`，工作区干净且与远端一致（无 ahead/behind）。正式标签 `v0.6.0` 仍指向 `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`，标签之后的提交不参与该版本资产；历史正式标签保持固定，不得覆盖。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - 上一正式代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；`0.6.0` 为其后的 `68320c8` 文档提交加 `9b6bd02` 功能提交。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
@@ -113,7 +113,7 @@ dotnet --version
 - 隔离验证证据：修改前真实 `update-failures.log` 为 26661 字节、SHA-256 `3A5F7D3ED4CEFB1E75D6C3031C2B6AAC77765471F9A066B27FA04A00FB3435D9`；重跑 Release 构建与 41/41 SmokeTests 后该文件哈希与字节数完全不变，证明回归测试不再写入真实用户日志目录。另用绝对路径直接启动包外更新器复核：退出码 1，隔离目录生成 410 字节日志并包含越界路径记录。
 - 本地 Lite 预览包（非正式 Release，沿用 `0.6.0` 仅供验收）：`temp/preview-log-isolation/PathEcho-0.6.0-Lite.zip`，614197 字节，SHA-256 `26688A9688EB6C04947D0D31D7EF1A71F0A275201A3B75A005EAF745297F7F39`；包内 `version.txt`/`channel.txt` 为 `0.6.0`/`Lite`。包内更新器对自身包的 `--verify-only` 预检返回 0；对含 `../escape.txt` 的恶意包返回 1 且把失败日志写入指定隔离目录（410 字节），未触碰真实用户日志。
 - 本文尾部原有一行“当前正式版本：`0.5.0`”追加在维护章节之后，与版本源矛盾且违反易变事实分节原则，已删除；版本号一律以 `Directory.Build.props` 与“当前快照”为准。
-- 本轮改动文件：`src/PathEcho.Updater/Program.cs`、`tests/PathEcho.SmokeTests/Program.cs`、`CODEX_PROGRESS.md`。截至收尾仅为本地工作区改动，未提交、未推送、未打标签。
+- 本轮改动文件：`src/PathEcho.Updater/Program.cs`、`tests/PathEcho.SmokeTests/Program.cs`、`CODEX_PROGRESS.md`。提交与推送是用户明确授权的边界：不创建标签、不触发 Release 工作流、不改动版本源；三者均保持未动。
 
 2026-10-19 `0.6.0` 发布前本地验证：
 
