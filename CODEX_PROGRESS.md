@@ -17,10 +17,10 @@ dotnet --version
 
 ## 当前快照
 
-- 最后本地及 GitHub 核验：2026-10-20，Asia/Shanghai（本轮独立重跑门禁并联网核验线上）。
-- 当前工作：`v0.6.0` 已经通过 GitHub Actions 正式发布并完成线上核验；本轮补齐发布后验证记录、修正本文过期条目，并把回归测试的更新器失败日志改为隔离目录。真机双机 OneDrive 验收仍待用户执行。
-- 版本：`0.6.0`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。GitHub latest 已指向 `v0.6.0`。
-- 分支：`main`；本轮接续修复已推送到 `origin/main`，工作区干净且与远端一致（无 ahead/behind）。正式标签 `v0.6.0` 仍指向 `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`，标签之后的提交不参与该版本资产；历史正式标签保持固定，不得覆盖。
+- 最后本地核验：2026-11-04，Asia/Shanghai（本轮变化备份节流 + 尾随修复，43 项冒烟测试全过 + 独立模拟进程端到端验证）。
+- 当前工作：本轮修复「同一存档多次触发备份」问题：最低间隔扩展到文件变化备份（手动/定时/游戏退出豁免），被跳过的变化在窗口结束后尾随补齐；并修复尾随等待后残留监听唤醒信号额外生成内容重复快照的问题。版本递增到 `0.6.1` 并推送标签触发 CI 发布，真机验收待用户执行。
+- 版本：`0.6.1`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。`v0.6.0` 为上一正式版本。
+- 分支：`main`；本轮修复提交 `feat(backup)` 已推送到 `origin/main`，标签 `v0.6.1` 触发 Release 工作流。正式标签 `v0.6.0` 仍指向 `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`，历史正式标签保持固定，不得覆盖。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - 上一正式代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；`0.6.0` 为其后的 `68320c8` 文档提交加 `9b6bd02` 功能提交。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
@@ -36,6 +36,7 @@ dotnet --version
 - `v0.3.1` 已正式发布：标签指向 `d54c13bc4b7f8cc9053cbe689c190375fd22527f`，GitHub Actions Run `32876134335` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.3.1`；8 个资产均为 uploaded，latest 已指向该版本，三份签名清单与 Release ZIP 元数据一致。
 - `v0.4.0` 已正式发布：标签指向 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`，GitHub Actions Run `32945051053` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.4.0`；8 个资产、7 条 SHA-256、三份正式签名清单、Lite/Full 包结构、latest 路由及 `v0.3.1 -> v0.4.0` 隔离升级链均已核验。
 - `v0.5.0` 已正式发布：标签指向 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`，GitHub Actions Run `32972364039` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.5.0`；8 个资产、7 条 SHA-256、三份正式签名清单、Lite 包结构、latest 路由及 `v0.4.0 -> v0.5.0` 隔离升级事务均已核验。
+- `v0.6.1` 发布由标签触发 CI，含变化备份节流豁免矩阵单元测试与独立模拟游戏进程端到端验证（报告在 `temp/e2e/throttle-check/temp/e2e-run/report.json`）；CI 结果与线上资产待核验后回填本文。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。

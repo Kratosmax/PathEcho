@@ -50,6 +50,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("更新器离开安装目录后可移动整个目录", TestUpdaterWorkingDirectoryAsync),
     ("Lite 安装器正确检测 x64 Desktop Runtime", TestLiteInstallerRuntimeDetectionContractAsync),
     ("游戏文件变化可触发备份并限制重点备份频率", TestGameBackupMonitorAsync),
+    ("变化备份受最低间隔限制且手动定时退出不受限", TestChangeBackupThrottleExemptionsAsync),
+    ("变化备份被最低间隔跳过后会尾随补齐", TestChangeBackupTrailingAsync),
     ("游戏监听溢出后执行全量备份", TestGameBackupMonitorOverflowAsync),
     ("整目录与正则文件回档可事务恢复", TestSnapshotRestoreAsync),
     ("Restart Manager 可识别占用且保护当前进程", TestRestartManagerAsync),
@@ -1327,6 +1329,94 @@ async Task TestGameBackupMonitorAsync()
     }
 
     True(importantMonitorStore.LastChangedPaths is null, "重点文件变动没有按整目录备份。");
+}
+
+async Task TestChangeBackupThrottleExemptionsAsync()
+{
+    var root = Path.Combine(testRoot, "change-throttle-exempt");
+    var save = Path.Combine(root, "save");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(save);
+    await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "progress");
+    var profile = new GameBackupProfile
+    {
+        Name = "变化节流游戏",
+        SaveDirectory = save,
+        Triggers = BackupTrigger.ChangedFiles | BackupTrigger.ImportantFileChanged |
+            BackupTrigger.Scheduled | BackupTrigger.ProcessExited,
+        ImportantFilePatterns = new[] { @"\.sav$" },
+        MinimumBackupInterval = TimeSpan.FromSeconds(2),
+        ProcessExecutablePath = Environment.ProcessPath,
+    };
+    var store = new RecordingSnapshotStore();
+    var service = new GameBackupService(profile, backup, store);
+
+    var firstChange = await service.CreateAsync(BackupTrigger.ChangedFiles);
+    True(firstChange is not null, "首次变化备份被错误跳过。");
+    True(await service.CreateAsync(BackupTrigger.ChangedFiles) is null, "变化备份最低间隔未生效。");
+    True(await service.CreateAsync(BackupTrigger.ImportantFileChanged) is null, "最低间隔未约束重点文件变化。");
+
+    True(await service.CreateAsync(BackupTrigger.None) is not null, "手动备份不应受最低间隔限制。");
+    True(await service.CreateAsync(BackupTrigger.Scheduled) is not null, "定时备份不应受最低间隔限制。");
+    True(await service.CreateAsync(BackupTrigger.ProcessExited) is not null, "游戏退出备份不应受最低间隔限制。");
+    True(await service.CreateAsync(BackupTrigger.ProcessExited) is not null, "游戏退出备份不应被自身节流。");
+
+    var remaining = service.GetChangeThrottleRemaining(DateTimeOffset.UtcNow);
+    True(remaining > TimeSpan.Zero && remaining <= profile.MinimumBackupInterval, "窗口内应报告剩余等待时间。");
+    Equal(TimeSpan.Zero, service.GetChangeThrottleRemaining(DateTimeOffset.UtcNow.AddHours(1)), "窗口外剩余时间应为零。");
+
+    // 窗口过期后变化备份恢复；若退出备份写入了节流窗口，此处会被错误跳过。
+    await Task.Delay(remaining + TimeSpan.FromMilliseconds(200));
+    var afterWindow = await service.CreateAsync(BackupTrigger.ChangedFiles);
+    True(afterWindow is not null, "窗口过期后变化备份仍被跳过，手动/定时/退出备份疑似写入了节流窗口。");
+    True(await service.CreateAsync(BackupTrigger.ChangedFiles) is null, "新的变化备份应重新进入最低间隔窗口。");
+}
+
+async Task TestChangeBackupTrailingAsync()
+{
+    var root = Path.Combine(testRoot, "change-trailing");
+    var save = Path.Combine(root, "save");
+    var backup = Path.Combine(root, "backup");
+    Directory.CreateDirectory(save);
+    var profile = new GameBackupProfile
+    {
+        Name = "尾随备份游戏",
+        SaveDirectory = save,
+        Triggers = BackupTrigger.ChangedFiles,
+        MinimumBackupInterval = TimeSpan.FromSeconds(4),
+    };
+    var service = new GameBackupService(profile, backup);
+    await using var monitor = new GameBackupMonitor(profile, service);
+    var firstBackup = new TaskCompletionSource<SnapshotCreationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var trailingBackup = new TaskCompletionSource<SnapshotCreationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+    var backups = 0;
+    monitor.BackupCreated += (_, result) =>
+    {
+        if (Interlocked.Increment(ref backups) == 1)
+        {
+            firstBackup.TrySetResult(result);
+        }
+        else
+        {
+            trailingBackup.TrySetResult(result);
+        }
+    };
+    monitor.Start();
+    await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "first-write");
+    await firstBackup.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+    // 模拟游戏存档：主存档之后的轮换文件晚于去抖窗口（750ms）陆续写入，全部落在节流窗口内。
+    await Task.Delay(TimeSpan.FromSeconds(1));
+    await File.WriteAllTextAsync(Path.Combine(save, "rotate.sav"), "second-write");
+    await Task.Delay(TimeSpan.FromSeconds(1));
+    await File.WriteAllTextAsync(Path.Combine(save, "rotate2.sav"), "third-write");
+
+    var trailing = await trailingBackup.Task.WaitAsync(TimeSpan.FromSeconds(15));
+    True(backups == 2, $"期望恰好两次快照（主备份+尾随），实际 {backups} 次。");
+    var manifest = await SnapshotContent.ReadManifestAsync(trailing.SnapshotDirectory, CancellationToken.None);
+    True(manifest.Files.Any(entry => entry.RelativePath == "rotate.sav"), "尾随快照缺少第二个文件。");
+    True(manifest.Files.Any(entry => entry.RelativePath == "rotate2.sav"), "尾随快照缺少等待期间新变化的文件。");
+    True(manifest.Files.Any(entry => entry.RelativePath == "slot.sav"), "尾随快照丢失第一个文件。");
 }
 
 async Task TestGameBackupMonitorOverflowAsync()

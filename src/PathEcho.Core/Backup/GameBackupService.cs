@@ -12,7 +12,7 @@ public sealed class GameBackupService
     private readonly BackupRetryOptions _retryOptions;
     private readonly CancellationToken _lifetimeToken;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private DateTimeOffset? _lastImportantBackupAtUtc;
+    private DateTimeOffset? _lastChangeBackupAtUtc;
 
     public GameBackupService(
         GameBackupProfile profile,
@@ -44,8 +44,10 @@ public sealed class GameBackupService
         try
         {
             var now = DateTimeOffset.UtcNow;
-            if (trigger == BackupTrigger.ImportantFileChanged &&
-                _lastImportantBackupAtUtc is { } last &&
+            // 只有变化类触发受最低间隔限制；手动、定时与游戏退出备份始终即时执行。
+            var isChangeTrigger = trigger is BackupTrigger.ChangedFiles or BackupTrigger.ImportantFileChanged;
+            if (isChangeTrigger &&
+                _lastChangeBackupAtUtc is { } last &&
                 now - last < _profile.MinimumBackupInterval)
             {
                 return null;
@@ -80,9 +82,9 @@ public sealed class GameBackupService
                         _profile.RetainedDailyVersions),
                     token),
                 effectiveCancellation).ConfigureAwait(false);
-            if (trigger == BackupTrigger.ImportantFileChanged)
+            if (isChangeTrigger)
             {
-                _lastImportantBackupAtUtc = now;
+                _lastChangeBackupAtUtc = now;
             }
 
             return result;
@@ -91,6 +93,17 @@ public sealed class GameBackupService
         {
             _gate.Release();
         }
+    }
+
+    public TimeSpan GetChangeThrottleRemaining(DateTimeOffset now)
+    {
+        if (_lastChangeBackupAtUtc is not { } last)
+        {
+            return TimeSpan.Zero;
+        }
+
+        var remaining = last + _profile.MinimumBackupInterval - now;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     private async Task<SnapshotCreationResult> CreateFromStagingAsync(

@@ -103,24 +103,81 @@ public sealed class GameBackupMonitor : IAsyncDisposable
             }
 
             var forceFullSnapshot = Interlocked.Exchange(ref _requiresFullSnapshot, 0) != 0;
+            if (paths.Length == 0 && !forceFullSnapshot)
+            {
+                // 只有唤醒信号而没有实际变化（例如变化已被尾随备份合并处理），不产生快照。
+                continue;
+            }
 
-            var trigger = _profile.Triggers.HasFlag(BackupTrigger.ImportantFileChanged) &&
-                (forceFullSnapshot || paths.Any(IsImportantFile))
-                    ? BackupTrigger.ImportantFileChanged
-                    : _profile.Triggers.HasFlag(BackupTrigger.ChangedFiles)
-                        ? BackupTrigger.ChangedFiles
-                        : BackupTrigger.None;
+            var trigger = ResolveTrigger(forceFullSnapshot, paths);
             if (trigger != BackupTrigger.None)
             {
-                await TryCreateAsync(
+                var result = await TryCreateAsync(
                     trigger,
                     cancellationToken,
                     forceFullSnapshot || trigger == BackupTrigger.ImportantFileChanged
                         ? null
                         : paths).ConfigureAwait(false);
+                if (result is null)
+                {
+                    await RunTrailingBackupAsync(trigger, paths, cancellationToken).ConfigureAwait(false);
+                }
             }
         }
     }
+
+    private async Task RunTrailingBackupAsync(
+        BackupTrigger trigger,
+        IReadOnlyCollection<string> throttledPaths,
+        CancellationToken cancellationToken)
+    {
+        // 备份被最低间隔跳过时，等待窗口结束后补一次，避免最后一次变化永久丢失。
+        var pendingPaths = new HashSet<string>(throttledPaths, StringComparer.OrdinalIgnoreCase);
+        while (true)
+        {
+            var remaining = _service.GetChangeThrottleRemaining(DateTimeOffset.UtcNow);
+            if (remaining > TimeSpan.Zero)
+            {
+                await Task.Delay(remaining, cancellationToken).ConfigureAwait(false);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+
+            lock (_changesGate)
+            {
+                foreach (var path in _changedPaths)
+                {
+                    pendingPaths.Add(path);
+                }
+                _changedPaths.Clear();
+            }
+
+            var forceFullSnapshot = Interlocked.Exchange(ref _requiresFullSnapshot, 0) != 0;
+            var trailingTrigger = ResolveTrigger(forceFullSnapshot, pendingPaths);
+            if (trailingTrigger == BackupTrigger.None)
+            {
+                trailingTrigger = trigger;
+            }
+
+            var result = await TryCreateAsync(
+                trailingTrigger,
+                cancellationToken,
+                forceFullSnapshot || trailingTrigger == BackupTrigger.ImportantFileChanged
+                    ? null
+                    : pendingPaths.ToArray()).ConfigureAwait(false);
+            if (result is not null)
+            {
+                return;
+            }
+        }
+    }
+
+    private BackupTrigger ResolveTrigger(bool forceFullSnapshot, IReadOnlyCollection<string> paths) =>
+        _profile.Triggers.HasFlag(BackupTrigger.ImportantFileChanged) &&
+        (forceFullSnapshot || paths.Any(IsImportantFile))
+            ? BackupTrigger.ImportantFileChanged
+            : _profile.Triggers.HasFlag(BackupTrigger.ChangedFiles)
+                ? BackupTrigger.ChangedFiles
+                : BackupTrigger.None;
 
     private async Task RunScheduleAsync(CancellationToken cancellationToken)
     {
@@ -146,7 +203,7 @@ public sealed class GameBackupMonitor : IAsyncDisposable
         }
     }
 
-    private async Task TryCreateAsync(
+    private async Task<SnapshotCreationResult?> TryCreateAsync(
         BackupTrigger trigger,
         CancellationToken cancellationToken,
         IReadOnlyCollection<string>? changedPaths = null)
@@ -158,6 +215,8 @@ public sealed class GameBackupMonitor : IAsyncDisposable
             {
                 BackupCreated?.Invoke(this, result);
             }
+
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -166,6 +225,7 @@ public sealed class GameBackupMonitor : IAsyncDisposable
         catch (Exception exception)
         {
             BackupFailed?.Invoke(this, exception);
+            return null;
         }
     }
 
