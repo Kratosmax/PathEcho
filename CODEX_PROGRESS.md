@@ -36,7 +36,7 @@ dotnet --version
 - `v0.3.1` 已正式发布：标签指向 `d54c13bc4b7f8cc9053cbe689c190375fd22527f`，GitHub Actions Run `32876134335` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.3.1`；8 个资产均为 uploaded，latest 已指向该版本，三份签名清单与 Release ZIP 元数据一致。
 - `v0.4.0` 已正式发布：标签指向 `15bf74a46e36de1580359cca871b9ff2db9f0c8e`，GitHub Actions Run `32945051053` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.4.0`；8 个资产、7 条 SHA-256、三份正式签名清单、Lite/Full 包结构、latest 路由及 `v0.3.1 -> v0.4.0` 隔离升级链均已核验。
 - `v0.5.0` 已正式发布：标签指向 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`，GitHub Actions Run `32972364039` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.5.0`；8 个资产、7 条 SHA-256、三份正式签名清单、Lite 包结构、latest 路由及 `v0.4.0 -> v0.5.0` 隔离升级事务均已核验。
-- `v0.6.1` 发布由标签触发 CI，含变化备份节流豁免矩阵单元测试与独立模拟游戏进程端到端验证（报告在 `temp/e2e/throttle-check/temp/e2e-run/report.json`）；CI 结果与线上资产待核验后回填本文。
+- `v0.6.1` 已正式发布：标签指向 `260fb05`，GitHub Actions Run `41837246858` 为 `completed/success`，Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.6.1`；8 个资产（Full/Lite ZIP+Setup、SHA256SUMS、三份签名清单）已核验，GitHub latest 已指向 `v0.6.1`。含变化备份节流豁免矩阵单元测试与独立模拟游戏进程端到端验证（报告在 `temp/e2e/throttle-check/temp/e2e-run/report.json`）。
 - Git 身份：仓库级 `小火车 <kratosthemax@gmail.com>`。
 - 用户已授权创建公开仓库 `Kratosmax/PathEcho`、提交、推送、配置更新签名 Secret 并发布首个可用版本；失败标签按发布规则递增补丁版本。
 - 初始实现与接续文件均已推送，当前可从公开仓库跨设备接续。
