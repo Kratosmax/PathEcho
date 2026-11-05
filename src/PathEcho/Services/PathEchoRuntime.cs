@@ -427,8 +427,35 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     public async Task<RestoreResult> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
     {
         EnsureNotPreview("预览模式不会执行真实存档回档。");
-        var service = new SnapshotRestoreService(new RestartManagerOccupancyService());
-        return await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
+        var profile = FindProfileBySaveDirectory(request.TargetDirectory);
+        if (profile is not null)
+        {
+            // 整目录回档会重建存档目录，原监听句柄随之失效且不会报错；回档期间先停监控。
+            await StopGameMonitorAsync(profile.Id).ConfigureAwait(false);
+        }
+
+        try
+        {
+            var service = new SnapshotRestoreService(new RestartManagerOccupancyService());
+            return await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (profile is not null && profile.IsEnabled)
+            {
+                await StartGameMonitorSafelyAsync(profile).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private GameBackupProfile? FindProfileBySaveDirectory(string targetDirectory)
+    {
+        var normalized = Path.GetFullPath(targetDirectory);
+        return Configuration.GameProfiles.FirstOrDefault(profile =>
+            string.Equals(
+                Path.GetFullPath(profile.SaveDirectory),
+                normalized,
+                StringComparison.OrdinalIgnoreCase));
     }
 
     public async Task<string> PrepareSnapshotBrowseAsync(
