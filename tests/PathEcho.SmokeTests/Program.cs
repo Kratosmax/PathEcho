@@ -21,6 +21,9 @@ Directory.CreateDirectory(testRoot);
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("配置可原子保存并读取", TestConfigurationStoreAsync),
+    ("目录剪枝保持过滤语义且扫描缓存有界", () => ScannerOptimizationTests.RunAsync(testRoot)),
+    ("通知队列可合并续期并按最早到期调度", NotificationQueueTests.RunAsync),
+    ("同步状态独立于文案且目录状态可刷新", () => RuntimeRowTests.RunAsync(testRoot)),
     ("自动备份通知可继承、关闭并按游戏覆盖", TestBackupNotificationSettingsAsync),
     ("单向同步可复制并在删除前备份", TestOneWaySyncAsync),
     ("双向冲突默认保留两份", TestBidirectionalConflictAsync),

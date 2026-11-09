@@ -5,14 +5,14 @@
         ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False">
     <Grid Margin="24">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="24"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <TextBlock x:Name="TitleText" FontSize="20" FontWeight="SemiBold"/>
+        <TextBlock x:Name="TitleText" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" LineHeight="28"/>
         <ScrollViewer Grid.Row="1" MaxHeight="280" VerticalScrollBarVisibility="Auto" Margin="0,12,0,0">
             <TextBlock x:Name="MessageText" TextWrapping="Wrap" LineHeight="21" Foreground="{StaticResource MutedBrush}"/>
         </ScrollViewer>
-        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button x:Name="TertiaryButton" Click="OnTertiary" Visibility="Collapsed" Margin="0,0,8,0"/>
-            <Button x:Name="SecondaryButton" Click="OnSecondary" Visibility="Collapsed" Margin="0,0,8,0"/>
-            <Button x:Name="PrimaryButton" Click="OnPrimary" Style="{StaticResource PrimaryButton}"/>
-        </StackPanel>
+        <WrapPanel Grid.Row="3" HorizontalAlignment="Right">
+            <Button x:Name="TertiaryButton" MinWidth="88" MaxWidth="420" Click="OnTertiary" Visibility="Collapsed" Margin="0,0,8,8"/>
+            <Button x:Name="SecondaryButton" MinWidth="88" MaxWidth="420" Click="OnSecondary" Visibility="Collapsed" Margin="0,0,8,8"/>
+            <Button x:Name="PrimaryButton" MinWidth="88" MaxWidth="420" Click="OnPrimary" Style="{StaticResource PrimaryButton}" Margin="0,0,0,8"/>
+        </WrapPanel>
     </Grid>
 </Window>

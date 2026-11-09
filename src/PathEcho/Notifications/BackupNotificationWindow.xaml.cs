@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -7,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using PathEcho.Core.Models;
+using PathEcho.Core.Notifications;
 using Forms = System.Windows.Forms;
 using MediaColor = System.Windows.Media.Color;
 
@@ -16,38 +18,29 @@ internal sealed record BackupNotificationRequest(string GameName, bool Succeeded
 
 public partial class BackupNotificationWindow : Window
 {
-    private static readonly TimeSpan Lifetime = TimeSpan.FromSeconds(5);
     private readonly BackupNotificationSettings _settings;
-    private readonly List<QueueItem> _items = [];
-    private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(200) };
+    private readonly BackupNotificationQueue<BackupNotificationRequest> _queue = new();
+    private readonly long _clockOrigin = Stopwatch.GetTimestamp();
+    private readonly DispatcherTimer _timer = new();
+    private bool _closed;
 
     internal BackupNotificationWindow(BackupNotificationSettings settings)
     {
         _settings = settings;
         InitializeComponent();
-        _timer.Tick += (_, _) => Refresh();
+        _timer.Tick += OnExpiration;
         SourceInitialized += (_, _) => MakeNonActivating();
-        Loaded += (_, _) => PositionWindow();
+        IsVisibleChanged += OnVisibilityChanged;
     }
 
     internal void Present(BackupNotificationRequest request)
     {
-        var now = DateTimeOffset.UtcNow;
-        Prune(now);
-        var duplicate = _items.FirstOrDefault(item => item.Request == request);
-        if (duplicate is not null)
+        if (_closed || Dispatcher.HasShutdownStarted)
         {
-            duplicate.Count++;
-            duplicate.ExpiresAt = now + Lifetime;
+            return;
         }
-        else
-        {
-            _items.Add(new QueueItem(request, now + Lifetime));
-        }
-        while (_items.Count > 4)
-        {
-            _items.RemoveAt(0);
-        }
+
+        _queue.Enqueue(request, Elapsed);
 
         Render();
         if (!IsVisible)
@@ -57,10 +50,7 @@ public partial class BackupNotificationWindow : Window
 
         UpdateLayout();
         PositionWindow();
-        if (!_timer.IsEnabled)
-        {
-            _timer.Start();
-        }
+        ScheduleExpiration();
     }
 
     internal async Task CaptureAsync(string path)
@@ -79,19 +69,68 @@ public partial class BackupNotificationWindow : Window
         await stream.FlushAsync();
     }
 
-    private void Refresh()
+    private TimeSpan Elapsed => Stopwatch.GetElapsedTime(_clockOrigin);
+
+    private void OnExpiration(object? sender, EventArgs e)
     {
-        Prune(DateTimeOffset.UtcNow);
-        if (_items.Count == 0)
+        // DispatcherTimer repeats by default. Treat each scheduled deadline as one shot.
+        _timer.Stop();
+        if (_closed || !IsVisible)
         {
-            Hide();
-            _timer.Stop();
             return;
         }
 
-        Render();
-        UpdateLayout();
-        PositionWindow();
+        if (_queue.Expire(Elapsed))
+        {
+            Render();
+            if (_queue.Items.Count == 0)
+            {
+                Hide();
+                return;
+            }
+
+            UpdateLayout();
+            PositionWindow();
+        }
+
+        ScheduleExpiration();
+    }
+
+    private void ScheduleExpiration()
+    {
+        _timer.Stop();
+        if (_closed || !IsVisible || _queue.NextExpiration is not { } next)
+        {
+            return;
+        }
+
+        var delay = next - Elapsed;
+        // A dispatcher wakeup can be slightly early; never spin on a zero interval.
+        _timer.Interval = delay > TimeSpan.FromMilliseconds(1) ? delay : TimeSpan.FromMilliseconds(1);
+        _timer.Start();
+    }
+
+    private void OnVisibilityChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (!IsVisible)
+        {
+            _timer.Stop();
+        }
+        else
+        {
+            ScheduleExpiration();
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        _closed = true;
+        _timer.Stop();
+        _timer.Tick -= OnExpiration;
+        IsVisibleChanged -= OnVisibilityChanged;
+        _queue.Clear();
+        QueueRows.Children.Clear();
+        base.OnClosed(e);
     }
 
     private void Render()
@@ -102,9 +141,9 @@ public partial class BackupNotificationWindow : Window
         var muted = dark ? MediaColor.FromRgb(190, 205, 199) : MediaColor.FromRgb(91, 105, 100);
         QueueRows.Children.Clear();
 
-        for (var index = 0; index < _items.Count; index++)
+        for (var index = 0; index < _queue.Items.Count; index++)
         {
-            var request = _items[index].Request;
+            var request = _queue.Items[index].Request;
             var accent = request.Succeeded ? MediaColor.FromRgb(45, 184, 128) : MediaColor.FromRgb(222, 84, 75);
             var content = new Grid();
             content.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(4) });
@@ -157,7 +196,7 @@ public partial class BackupNotificationWindow : Window
             });
             text.Children.Add(new TextBlock
             {
-                Text = _items[index].Count > 1 ? $"{request.Detail} · 重复 {_items[index].Count} 次" : request.Detail,
+                Text = _queue.Items[index].Count > 1 ? $"{request.Detail} · 重复 {_queue.Items[index].Count} 次" : request.Detail,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(muted),
                 TextWrapping = TextWrapping.Wrap,
@@ -203,15 +242,6 @@ public partial class BackupNotificationWindow : Window
         var handle = new WindowInteropHelper(this).Handle;
         var style = GetWindowLongPtr(handle, -20).ToInt64();
         _ = SetWindowLongPtr(handle, -20, new nint(style | 0x08000000L | 0x00000080L));
-    }
-
-    private void Prune(DateTimeOffset now) => _items.RemoveAll(item => item.ExpiresAt <= now);
-
-    private sealed class QueueItem(BackupNotificationRequest request, DateTimeOffset expiresAt)
-    {
-        internal BackupNotificationRequest Request { get; } = request;
-        internal DateTimeOffset ExpiresAt { get; set; } = expiresAt;
-        internal int Count { get; set; } = 1;
     }
 
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]

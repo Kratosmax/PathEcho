@@ -41,4 +41,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $assets = Get-ChildItem temp/release -File | Select-Object -ExpandProperty FullName
-          gh release create $env:GITHUB_REF_NAME $assets --verify-tag --title "PathEcho $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES_CURRENT.md
+          gh release create $env:GITHUB_REF_NAME $assets --draft --verify-tag --title "PathEcho $env:GITHUB_REF_NAME" --notes-file RELEASE_NOTES_CURRENT.md

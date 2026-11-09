@@ -1,9 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\PathEcho.Core\PathEcho.Core.csproj" />
     <ProjectReference Include="..\..\src\PathEcho.Platform.Windows\PathEcho.Platform.Windows.csproj" />
     <ProjectReference Include="..\..\src\PathEcho.Updater\PathEcho.Updater.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The presentation state has no WPF dependency: execute the same source in headless smoke tests. -->
+    <Compile Include="..\..\src\PathEcho\Services\SyncTaskRow.cs" Link="Presentation\SyncTaskRow.cs" />
+    <Compile Include="..\..\src\PathEcho\Services\NotifyObject.cs" Link="Presentation\NotifyObject.cs" />
   </ItemGroup>
 
   <PropertyGroup>

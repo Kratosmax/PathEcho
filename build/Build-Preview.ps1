@@ -36,11 +36,11 @@ if (Test-Path -LiteralPath $archive) {
     Remove-Item -LiteralPath $archive -Force
 }
 
-$appArguments = @("publish", (Join-Path $repository "src\PathEcho\PathEcho.csproj"), "-c", $Configuration, "-r", $Runtime, "--self-contained", "false", "-o", $packageRoot, "-m:1")
+$appArguments = @("publish", (Join-Path $repository "src\PathEcho\PathEcho.csproj"), "-c", $Configuration, "-r", $Runtime, "--self-contained", "false", "-p:PublishSelfContained=false", "-o", $packageRoot, "-m:1")
 & $DotNetPath @appArguments
 if ($LASTEXITCODE -ne 0) { throw "PathEcho publish failed." }
 
-$updaterArguments = @("publish", (Join-Path $repository "src\PathEcho.Updater\PathEcho.Updater.csproj"), "-c", $Configuration, "-r", $Runtime, "--self-contained", "false", "-p:PublishSingleFile=true", "-o", $updaterRoot, "-m:1")
+$updaterArguments = @("publish", (Join-Path $repository "src\PathEcho.Updater\PathEcho.Updater.csproj"), "-c", $Configuration, "-r", $Runtime, "--self-contained", "false", "-p:PublishSelfContained=false", "-p:PublishSingleFile=true", "-p:IncludeNativeLibrariesForSelfExtract=false", "-o", $updaterRoot, "-m:1")
 & $DotNetPath @updaterArguments
 if ($LASTEXITCODE -ne 0) { throw "PathEcho.Updater publish failed." }
 
@@ -49,6 +49,9 @@ $newLine = [Environment]::NewLine
 [IO.File]::WriteAllText((Join-Path $packageRoot "channel.txt"), "Lite$newLine", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $packageRoot "version.txt"), "$version$newLine", [Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $packageRoot ".pathecho-install-root"), "PathEcho$newLine", [Text.UTF8Encoding]::new($false))
+
+[IO.File]::WriteAllText((Join-Path $packageRoot "Start-Preview.cmd"), "@echo off" + $newLine + 'start "" "%~dp0PathEcho.exe" --preview --preview-seed' + $newLine, [Text.Encoding]::ASCII)
+[IO.File]::WriteAllText((Join-Path $packageRoot "README-PREVIEW.txt"), "PathEcho local preview - not an official Release." + $newLine + "Run Start-Preview.cmd to view isolated sample data without reading or changing your normal configuration." + $newLine + "Requires .NET 8 Desktop Runtime x64. Run PathEcho.exe for normal operation." + $newLine, [Text.UTF8Encoding]::new($false))
 
 Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $archive -CompressionLevel Optimal
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash

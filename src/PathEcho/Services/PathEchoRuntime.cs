@@ -33,12 +33,22 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     private readonly SnapshotStore _snapshotStore = new();
     private readonly StartupRegistrationService _startup = new();
     private readonly CancellationTokenSource _stopping = new();
+    private readonly CancellationToken _lifetimeToken;
+    private readonly Func<string, bool> _directoryExists;
     private readonly SemaphoreSlim _historyGate = new(1, 1);
     private Task? _historyPolling;
     private bool _disposed;
+    private int _directoryRefreshRunning;
 
     public PathEchoRuntime(bool previewMode, bool previewSeed = false)
+        : this(previewMode, previewSeed, Directory.Exists)
     {
+    }
+
+    internal PathEchoRuntime(bool previewMode, bool previewSeed, Func<string, bool> directoryExists)
+    {
+        _directoryExists = directoryExists ?? throw new ArgumentNullException(nameof(directoryExists));
+        _lifetimeToken = _stopping.Token;
         _previewMode = previewMode;
         _previewSeed = previewSeed;
         _dataRoot = Path.Combine(
@@ -62,6 +72,8 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     public ObservableCollection<SyncRunRow> SyncRuns { get; } = new();
 
     public event EventHandler<AutomaticBackupNotification>? AutomaticBackupNotificationRequested;
+
+    public event EventHandler? SyncTaskStatesChanged;
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
@@ -116,7 +128,12 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             foreach (var task in Configuration.SyncTasks)
             {
-                SyncTasks.Add(new SyncTaskRow(task));
+                var row = new SyncTaskRow(task);
+                if (_previewMode)
+                {
+                    row.ApplyDirectoryAvailability(true, true);
+                }
+                SyncTasks.Add(row);
             }
 
             foreach (var profile in Configuration.GameProfiles)
@@ -148,6 +165,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             }
         }
 
+        _ = RefreshSyncDirectoryStatesAsync(_stopping.Token);
         await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
         await RefreshSyncRunHistorySafelyAsync(cancellationToken).ConfigureAwait(false);
         if (!_previewMode)
@@ -166,6 +184,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
         Configuration = updatedConfiguration;
         await InvokeOnUiAsync(() => SyncTasks.Add(new SyncTaskRow(task)));
+        _ = RefreshSyncDirectoryStatesAsync(_stopping.Token);
         AppLogger.Debug($"Sync task created: {task.Id:N}.");
         if (!_previewMode && task.IsEnabled && task.StartWithApplication)
         {
@@ -309,6 +328,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
                 SyncTasks[index] = new SyncTaskRow(task);
             }
         });
+        _ = RefreshSyncDirectoryStatesAsync(_lifetimeToken);
         AppLogger.Debug($"Sync task updated: {task.Id:N}.");
         if (!_previewMode && task.IsEnabled && task.StartWithApplication)
         {
@@ -364,18 +384,18 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         var row = SyncTasks.Single(item => item.Definition.Id == taskId);
         AppLogger.Debug($"Manual synchronization started for task {taskId:N}.");
         var startedAt = DateTimeOffset.UtcNow;
-        await InvokeOnUiAsync(() => row.Status = "正在同步");
+        await InvokeOnUiAsync(() => UpdateSyncRow(row, SyncTaskActivity.Running, "正在同步"));
         try
         {
             var result = await GetSyncRunner(task.Id).RunAsync(task, true, cancellationToken).ConfigureAwait(false);
-            await InvokeOnUiAsync(() => row.Status = FormatSyncResult(result));
+            await InvokeOnUiAsync(() => UpdateSyncRow(row, SyncTaskActivity.Succeeded, FormatSyncResult(result)));
             await RecordSyncRunSafelyAsync(task, "手动", result, null, startedAt).ConfigureAwait(false);
             AppLogger.Debug($"Manual synchronization completed for task {taskId:N}.");
             return result;
         }
         catch (Exception exception)
         {
-            await InvokeOnUiAsync(() => row.Status = "同步失败");
+            await InvokeOnUiAsync(() => UpdateSyncRow(row, SyncTaskActivity.Failed, "同步失败"));
             await RecordSyncRunSafelyAsync(task, "手动", null, exception, startedAt).ConfigureAwait(false);
             AppLogger.Error($"Manual synchronization failed for task {taskId:N}.", exception);
             throw;
@@ -608,6 +628,86 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         }
     }
 
+    public async Task RefreshSyncDirectoryStatesAsync(CancellationToken cancellationToken = default)
+    {
+        if (_previewMode || _disposed || Interlocked.CompareExchange(ref _directoryRefreshRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        // A stalled OS network probe cannot be aborted. Keep at most one probe in flight,
+        // while bounding the wait of UI callers, history polling and application shutdown.
+        var refresh = RefreshSyncDirectoryStatesCoreAsync(cancellationToken);
+        using var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
+        try
+        {
+            await refresh.WaitAsync(TimeSpan.FromSeconds(2), waiting.Token).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        catch (TimeoutException)
+        {
+        }
+        catch (OperationCanceledException) when (_lifetimeToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RefreshSyncDirectoryStatesCoreAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
+            var token = linked.Token;
+            token.ThrowIfCancellationRequested();
+            var dispatcher = System.Windows.Application.Current.Dispatcher;
+            if (dispatcher.HasShutdownStarted)
+            {
+                return;
+            }
+            var rows = await dispatcher.InvokeAsync(() => SyncTasks.ToArray(), System.Windows.Threading.DispatcherPriority.Background, token);
+            var availability = await Task.Run(() => rows.Select(row =>
+            {
+                token.ThrowIfCancellationRequested();
+                var left = _directoryExists(row.LeftPath);
+                token.ThrowIfCancellationRequested();
+                return (Row: row, Left: left, Right: _directoryExists(row.RightPath));
+            }).ToArray(), token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            await dispatcher.InvokeAsync(() =>
+            {
+                if (_disposed || token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                var changed = false;
+                foreach (var item in availability)
+                {
+                    if (SyncTasks.Contains(item.Row))
+                    {
+                        changed |= item.Row.ApplyDirectoryAvailability(item.Left, item.Right);
+                    }
+                }
+
+                if (changed)
+                {
+                    SyncTaskStatesChanged?.Invoke(this, EventArgs.Empty);
+                }
+            }, System.Windows.Threading.DispatcherPriority.Background, token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            AppLogger.Error("Directory availability refresh failed.", exception);
+        }
+        finally
+        {
+            Volatile.Write(ref _directoryRefreshRunning, 0);
+        }
+    }
+
     private async Task PollHistoryAsync(CancellationToken cancellationToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(5));
@@ -615,6 +715,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         {
             while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
             {
+                await RefreshSyncDirectoryStatesAsync(cancellationToken).ConfigureAwait(false);
                 if (Configuration.GameProfiles.Any(profile => profile.IncludeOtherDeviceBackups || profile.LinkedBackupProfileIds.Count > 0))
                 {
                     await RefreshHistorySafelyAsync(cancellationToken).ConfigureAwait(false);
@@ -745,13 +846,13 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         var monitor = new SyncTaskMonitor(task, GetSyncRunner(task.Id));
         monitor.Synchronized += (_, result) =>
         {
-            SetSyncStatus(task.Id, FormatSyncResult(result));
+            SetSyncStatus(task.Id, SyncTaskActivity.Succeeded, FormatSyncResult(result));
             _ = RecordSyncRunSafelyAsync(task, "后台", result, null);
         };
         monitor.SynchronizationFailed += (_, exception) =>
         {
             AppLogger.Error($"Automatic synchronization failed for task {task.Id:N}.", exception);
-            SetSyncStatus(task.Id, $"失败：{exception.Message}");
+            SetSyncStatus(task.Id, SyncTaskActivity.Failed, $"失败：{exception.Message}");
             _ = RecordSyncRunSafelyAsync(task, "后台", null, exception);
         };
         _syncMonitors.Add(task.Id, monitor);
@@ -780,7 +881,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             AppLogger.Error($"Sync monitor startup failed for task {task.Id:N}.", exception);
-            SetSyncStatus(task.Id, $"监听失败：{exception.Message}");
+            SetSyncStatus(task.Id, SyncTaskActivity.Failed, $"监听失败：{exception.Message}");
         }
     }
 
@@ -1088,12 +1189,18 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         return result;
     }
 
-    private void SetSyncStatus(Guid taskId, string status) => System.Windows.Application.Current.Dispatcher.Invoke(() =>
+    private void UpdateSyncRow(SyncTaskRow row, SyncTaskActivity activity, string status)
+    {
+        row.SetStatus(activity, status);
+        SyncTaskStatesChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void SetSyncStatus(Guid taskId, SyncTaskActivity activity, string status) => System.Windows.Application.Current.Dispatcher.Invoke(() =>
     {
         var row = SyncTasks.FirstOrDefault(item => item.Definition.Id == taskId);
         if (row is not null)
         {
-            row.Status = status;
+            UpdateSyncRow(row, activity, status);
         }
     });
 
@@ -1172,144 +1279,4 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         result.CopiedFiles == 0 && result.DeletedFiles == 0 && result.Conflicts == 0
             ? "已同步"
             : $"复制 {result.CopiedFiles} · 删除 {result.DeletedFiles} · 冲突 {result.Conflicts}";
-}
-
-public sealed class SyncTaskRow : NotifyObject
-{
-    private string _status = "等待启动";
-    private readonly bool _leftDirectoryAvailable;
-    private readonly bool _rightDirectoryAvailable;
-
-    public SyncTaskRow(SyncTaskDefinition definition)
-    {
-        Definition = definition;
-        _leftDirectoryAvailable = Directory.Exists(definition.LeftPath);
-        _rightDirectoryAvailable = Directory.Exists(definition.RightPath);
-    }
-
-    public SyncTaskDefinition Definition { get; }
-    public string Name => Definition.Name;
-    public string LeftPath => Definition.LeftPath;
-    public string RightPath => Definition.RightPath;
-    public bool HasDirectoryIssue => !_leftDirectoryAvailable || !_rightDirectoryAvailable;
-    public string DirectoryState => HasDirectoryIssue ? "需要检查" : "可用";
-    public string DirectoryStateDetail => (!_leftDirectoryAvailable, !_rightDirectoryAvailable) switch
-    {
-        (true, true) => "源目录和目标目录均不可用",
-        (true, false) => "源目录不可用",
-        (false, true) => "目标目录不可用",
-        _ => "源目录和目标目录均可用",
-    };
-    public string Mode => Definition.Mode switch
-    {
-        SyncMode.LeftToRight => "左 → 右",
-        SyncMode.RightToLeft => "右 → 左",
-        _ => "双向",
-    };
-    public string Deletion => Definition.DeletionMode switch
-    {
-        DeletionMode.Ignore => "不传播删除",
-        DeletionMode.Propagate => "传播删除",
-        _ => "删除前备份",
-    };
-
-    public string Status
-    {
-        get => _status;
-        set => SetField(ref _status, value);
-    }
-}
-
-public sealed class GameProfileRow : NotifyObject
-{
-    private string _status = "等待启动";
-
-    public GameProfileRow(GameBackupProfile definition) => Definition = definition;
-
-    public GameBackupProfile Definition { get; }
-    public string Name => Definition.Name;
-    public string SaveDirectory => Definition.SaveDirectory;
-    public int RetainedVersions => Definition.RetainedVersions;
-    public string RetentionSummary => $"{Definition.RetainedVersions} + {Definition.RetainedHourlyVersions}时 + {Definition.RetainedDailyVersions}日";
-    public string Triggers => string.Join("、", new[]
-    {
-        Definition.Triggers.HasFlag(BackupTrigger.Scheduled) ? "定时" : null,
-        Definition.Triggers.HasFlag(BackupTrigger.ImportantFileChanged) ? "重点文件" : null,
-        Definition.Triggers.HasFlag(BackupTrigger.ChangedFiles) ? "文件变化" : null,
-        Definition.Triggers.HasFlag(BackupTrigger.ProcessExited) ? "游戏退出" : null,
-    }.Where(value => value is not null));
-
-    public string Status
-    {
-        get => _status;
-        set => SetField(ref _status, value);
-    }
-}
-
-public sealed class HistoryRow
-{
-    public HistoryRow(GameBackupProfile profile, SnapshotVersion version)
-    {
-        Profile = profile;
-        Version = version;
-    }
-
-    public GameBackupProfile Profile { get; }
-    public SnapshotVersion Version { get; }
-    public string GameName => Profile.Name;
-    public DateTimeOffset CreatedAtUtc => Version.Manifest.CreatedAtUtc;
-    public string CreatedAt => CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
-    public string Trigger => Version.Manifest.Trigger;
-    public bool IsContentAvailable => Version.IsContentAvailable;
-    public string Availability => !IsContentAvailable ? "等待云同步" :
-        Version.Manifest.ProfileId != Profile.Id ? "关联备份" : "当前档案";
-    public int FileCount => Version.Manifest.Files.Count;
-    public string SnapshotDirectory => Version.SnapshotDirectory;
-}
-
-public sealed class SyncRunRow
-{
-    public SyncRunRow(SyncRunRecord record) => Record = record;
-
-    public SyncRunRecord Record { get; }
-    public string TaskName => Record.TaskName;
-    public string CompletedAt => Record.CompletedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
-    public string Trigger => Record.Trigger;
-    public string Result => Record.Succeeded ? "成功" : "失败";
-    public string Summary => Record.Succeeded
-        ? $"复制 {Record.CopiedFiles} · 删除 {Record.DeletedFiles} · 冲突 {Record.Conflicts}"
-        : Record.Error ?? "未知错误";
-}
-
-public sealed record GameDiscoveryOutcome(
-    IReadOnlyList<DiscoveredGame> Matches,
-    long CatalogRevision,
-    bool UsedCachedCopy,
-    IReadOnlyList<string> RouteFailures);
-
-public sealed record SettingsSaveResult(
-    bool BackupRootChanged,
-    int MovedBackupProfiles,
-    int ProfilesWithoutBackups,
-    string? StartupWarning);
-
-public sealed record AutomaticBackupNotification(
-    GameBackupProfile Profile,
-    bool Succeeded,
-    string Detail);
-
-public abstract class NotifyObject : INotifyPropertyChanged
-{
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    protected void SetField<T>(ref T field, T value, [CallerMemberName] string? propertyName = null)
-    {
-        if (EqualityComparer<T>.Default.Equals(field, value))
-        {
-            return;
-        }
-
-        field = value;
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
 }

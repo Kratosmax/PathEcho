@@ -33,9 +33,9 @@ foreach ($channel in @("Lite", "Full")) {
     $packageRoot = Join-Path $resolvedRelease "package-$channel"
     $updaterRoot = Join-Path $resolvedRelease "updater-$channel"
     $selfContained = if ($channel -eq "Full") { "true" } else { "false" }
-    & $DotNetPath publish (Join-Path $repository "src\PathEcho\PathEcho.csproj") -c $Configuration -r $Runtime --self-contained $selfContained -o $packageRoot -m:1
+    & $DotNetPath publish (Join-Path $repository "src\PathEcho\PathEcho.csproj") -c $Configuration -r $Runtime --self-contained $selfContained -p:PublishSelfContained=$selfContained -o $packageRoot -m:1
     if ($LASTEXITCODE -ne 0) { throw "$channel app publish failed." }
-    & $DotNetPath publish (Join-Path $repository "src\PathEcho.Updater\PathEcho.Updater.csproj") -c $Configuration -r $Runtime --self-contained $selfContained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $updaterRoot -m:1
+    & $DotNetPath publish (Join-Path $repository "src\PathEcho.Updater\PathEcho.Updater.csproj") -c $Configuration -r $Runtime --self-contained $selfContained -p:PublishSelfContained=$selfContained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o $updaterRoot -m:1
     if ($LASTEXITCODE -ne 0) { throw "$channel updater publish failed." }
     Get-ChildItem -LiteralPath $updaterRoot -File | Copy-Item -Destination $packageRoot -Force
 

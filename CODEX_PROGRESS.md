@@ -17,12 +17,12 @@ dotnet --version
 
 ## 当前快照
 
-- 最后本地核验：2026-11-05，Asia/Shanghai（本轮修复回档后监听静默失效，43 项冒烟测试全过 + 独立模拟进程回档端到端验证）。
-- 当前工作：本轮修复「回档后自动备份失效」：整目录回档会 move 重建存档目录，`FileSystemWatcher` 句柄随旧目录对象一起失效且不触发 Error，监听静默死亡（复现证据：`temp/e2e/restore-check`，修复前回档后继续存档快照零新增）。修复为 `Runtime.RestoreAsync` 回档前停对应游戏的监控、回档后（含失败）重启监控；e2e 复验回档后快照恢复持续产生。版本递增到 `0.6.2` 并推送标签触发 CI 发布。该修复位于 UI 装配层，冒烟测试无法覆盖，回归防线为 e2e harness。
-- 版本：`0.6.2`，唯一来源为 `Directory.Build.props`；程序集版本、界面显示、包名、清单和标签从该版本推导。`v0.6.1` 为上一正式版本。
-- 分支：`main`；本轮修复提交 `fix(restore)` 已推送到 `origin/main`，标签 `v0.6.2` 触发 Release 工作流。正式标签 `v0.6.0` 仍指向 `9b6bd0276d7e8816c1504c8993e09f9075dabb8d`，历史正式标签保持固定，不得覆盖。
+- 最后本地核验：2026-11-09，UTC+8。基线 main `9588a64` / `0.6.2`；性能/结构/界面改进已在本地完成，Release 构建 0 警告 0 错误、冒烟 46/46、真实桌面行为套件通过、格式与 whitespace 检查通过。本机 SDK `10.0.201`，产品目标仍为 .NET 8。
+- 当前工作：用户已明确授权推送并发布本批优化，准备 `0.7.0`。本地版本构建 0 警告 0 错误、46 项冒烟、桌面行为与格式检查通过；四包已构建，测试密钥按正式公钥验签预期拒绝并已删除。原始 `0.6.2` Lite/Full ZIP 已按正式清单核对 SHA-256，两个原始更新器对本地 `0.7.0` 候选包预检通过。Release 工作流先创建草稿，必须完成正式签名清单、资产哈希及上一版升级核验后再公开。最初审查中的 R1–R8 未全部修复，发布说明明确披露，未扩大本轮为备份系统重构。
+- 版本：`0.7.0` 待发布，唯一来源为 `Directory.Build.props`；上一正式版为 `v0.6.2`。不得覆盖任何历史标签或资产。
+- 分支：`main`，优化提交基于 `9588a64`，正在按本轮授权提交推送。正式标签仍保持固定，候选标签为 `v0.7.0`。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
-- 上一正式代码基线：`v0.5.0` 固定在功能提交 `911bc88c49b9100f986c21c1c3c85d90f3173cbd`；`0.6.0` 为其后的 `68320c8` 文档提交加 `9b6bd02` 功能提交。
+- 上一正式版本：`v0.6.1`，标签提交 `260fb05`；当前正式版本为 `v0.6.2`。本轮通过 GitHub API 复核 latest 和 8 个 uploaded 资产，未重跑正式包下载验签或旧版升级。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
@@ -79,6 +79,8 @@ dotnet --version
 
 ## 当前待办
 
+- 2026-11-09 审查发现及优先级见 [报告](docs/reviews/2026-11-09.md)。优先修复 R1/R2/R3 的备份真实性问题；本轮追加的性能/结构/审美工作已交付并修复 R9，R1–R8 尚未全部修复，不应将本次预览视为这些缺陷已解决。隔离探针与结果位于忽略提交的 `temp/review/lead-probes`，不应把原有 43 项冒烟通过解读为这些组合场景已正确。选文件回档清理失败仅为控制流风险，本轮目录句柄故障注入未复现，不能标成动态确认。
+
 - `v0.6.0` 已发布并完成线上核验；真机双机 OneDrive 传输、按需文件下载和云盘冲突副本仍需要实际设备验收，本地无法替代。
 - **远程游戏识别目录当前线上不可用**：客户端默认地址 `https://raw.githubusercontent.com/Kratosmax/PathEcho/main/config/game-catalog.json` 实际返回 404，仓库 `main` 只跟踪 `config/game-catalog.source.json`，签名产物从未提交。`Sign game catalog` 工作流历史上只运行过 1 次（Run `32617637717`，2026-08-23，提交 `ac4e9be`），`Sign catalog` 步骤失败、`Commit signed catalog` 被跳过，因此与 `v0.2.3` 未发布同源。当前 `main` 的 ReleaseTool 已实测可编译（0 警告 0 错误），`game-catalog.source.json` 的 `revision` 仍为 1 且输出不存在，重新触发该工作流（`workflow_dispatch` 或修改源文件）即可产出；执行需要用户明确授权，属独立外部动作。在此之前智能识别只能明确报错，不会有可信缓存。
 - 本机 Git 全局配置实际为 `http.https://github.com.proxy=http://127.0.0.1:10808`（旧记录写的 10809 已过期）。实测：`api.github.com` 直连可用，`github.com/.../releases/download` 与 `raw.githubusercontent.com` 直连超时，旧客户端自动更新的下载环节在当前网络必须依赖应用内 URL 前缀线路或代理。只按命令级临时覆盖处理，不静默修改用户全局配置。
@@ -100,6 +102,8 @@ dotnet --version
 - 回归测试：`tests/PathEcho.SmokeTests`
 
 ## 验证证据
+
+2026-11-09 优化交付：解决方案现包含可重复执行的 `tests/PathEcho.DesktopTests`，并通过真实 WPF 横滚操作、设置固定保存区、ComboBox 键盘/回写、通知生命周期和受控目录阻塞/取消/退出验证；不启动正式 Startup，不读取真实配置。扫描 before/after 原始数据在 `temp/optimization/scanner/results.json`，桌面结果在 `temp/desktop-tests/results.json`；新旧通知对比证据见优化交付文档。`920×620` 和 `1180×760` 四页及右端/底部/空态已由独立成员亲自查看，初次压列问题修复后通过。多 DPI、真实网络卷恢复和旧版完整自动升级未验收。
 
 2026-10-20 接手校准、`v0.6.0` 发布后核验与测试日志隔离（本轮实际执行）：
 

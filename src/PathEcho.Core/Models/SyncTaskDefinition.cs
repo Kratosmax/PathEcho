@@ -104,6 +104,15 @@ public sealed record SyncFilterRules
         return included && !ExcludePatterns.Any(pattern => Matches(pattern, normalized));
     }
 
+    internal bool ExcludesDirectory(string relativeDirectory)
+    {
+        var prefix = relativeDirectory.Replace('\\', '/').TrimEnd('/') + "/";
+        // SimpleExpression '*' also consumes '/'. A matching pattern ending in '*'
+        // therefore continues to match every possible descendant of this prefix.
+        // Include patterns cannot override an exclusion in Includes().
+        return ExcludePatterns.Any(pattern => pattern.EndsWith('*') && Matches(pattern, prefix));
+    }
+
     private static bool Matches(string pattern, string path) =>
         System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(
             pattern.Replace('\\', '/'),

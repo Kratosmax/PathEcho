@@ -1,6 +1,6 @@
 # PathEcho
 
-当前版本：`0.6.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
+当前版本：`0.7.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
 
 <img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
 
@@ -12,10 +12,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.6.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.6.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.6.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.6.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.7.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.7.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.7.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.7.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 
@@ -81,6 +81,12 @@ PathEcho 启动后可后台检查更新，也可在设置页手动检查。客�
 - 需要排查问题：在设置中启用 Debug 日志，日志写入 `%LocalAppData%\PathEcho\Logs`，最多保留 5 个滚动文件。
 - 回档提示文件占用：先正常退出游戏；需要结束进程时，PathEcho 会核对 PID 与启动时间并拒绝系统关键进程、自身进程和身份变化进程。
 
+## 本地优化工作区
+
+本版已完成目录排除剪枝与有界缓存、通知按到期调度、同步状态模型拆分及目录状态后台刷新，并改善表格、工具栏、设置页固定保存区与下拉框样式。实测数据、验证范围和本地 Lite 预览说明见 [优化交付记录](docs/reviews/2026-11-09-optimization.md)。当前版本为 `0.7.0`，发布核验状态以接续记录为准。
+
+窗口右上角关闭会隐藏到托盘继续监听；需要完全退出时使用托盘菜单的退出入口。
+
 ## 自行编译
 
 工具链：Windows x64、.NET SDK 8.0.424（或兼容 .NET 8 SDK）。构建安装器还需要 Inno Setup 6。
@@ -89,6 +95,8 @@ PathEcho 启动后可后台检查更新，也可在设置页手动检查。客�
 dotnet restore PathEcho.sln -m:1
 dotnet build PathEcho.sln -c Release --no-restore -m:1 -v:minimal
 dotnet run --project tests\PathEcho.SmokeTests\PathEcho.SmokeTests.csproj -c Release --no-build
+# 需要可交互的 Windows 桌面，会短暂显示隔离测试窗口
+dotnet run --project tests\PathEcho.DesktopTests\PathEcho.DesktopTests.csproj -c Release --no-build
 powershell -ExecutionPolicy Bypass -File build\Build-Preview.ps1
 # 若旧预览实例仍占用默认输出目录，可使用项目 temp 下的旁路目录
 powershell -ExecutionPolicy Bypass -File build\Build-Preview.ps1 -OutputDirectory temp\preview-settings-fix

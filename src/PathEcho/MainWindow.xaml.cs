@@ -66,6 +66,7 @@ public partial class MainWindow : Window
         runtime.GameProfiles.CollectionChanged += OnCollectionChanged;
         runtime.History.CollectionChanged += OnCollectionChanged;
         runtime.SyncRuns.CollectionChanged += OnCollectionChanged;
+        runtime.SyncTaskStatesChanged += (_, _) => RefreshSyncFilter();
         UpdateEmptyStates();
     }
 
@@ -131,6 +132,10 @@ public partial class MainWindow : Window
         }
 
         SelectView(selected);
+        if (selected == "Sync")
+        {
+            _ = _runtime.RefreshSyncDirectoryStatesAsync();
+        }
     }
 
     public void SelectPreviewView(string selected)
@@ -798,10 +803,10 @@ public partial class MainWindow : Window
 
         return (SyncStatusFilter?.SelectedItem as string) switch
         {
-            "可用" => !row.HasDirectoryIssue,
+            "可用" => row.AreDirectoriesAvailable,
             "目录异常" => row.HasDirectoryIssue,
-            "同步中" => row.Status.Contains("正在", StringComparison.Ordinal),
-            "失败" => row.Status.Contains("失败", StringComparison.Ordinal),
+            "同步中" => row.Activity == SyncTaskActivity.Running,
+            "失败" => row.Activity == SyncTaskActivity.Failed,
             _ => true,
         };
     }
