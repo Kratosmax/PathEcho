@@ -18,11 +18,11 @@ dotnet --version
 ## 当前快照
 
 - 最后本地核验：2026-11-09，UTC+8。基线 main `9588a64` / `0.6.2`；性能/结构/界面改进已在本地完成，Release 构建 0 警告 0 错误、冒烟 46/46、真实桌面行为套件通过、格式与 whitespace 检查通过。本机 SDK `10.0.201`，产品目标仍为 .NET 8。
-- 当前工作：用户已明确授权推送并发布本批优化，准备 `0.7.0`。本地版本构建 0 警告 0 错误、46 项冒烟、桌面行为与格式检查通过；四包已构建，测试密钥按正式公钥验签预期拒绝并已删除。原始 `0.6.2` Lite/Full ZIP 已按正式清单核对 SHA-256，两个原始更新器对本地 `0.7.0` 候选包预检通过。Release 工作流先创建草稿，必须完成正式签名清单、资产哈希及上一版升级核验后再公开。最初审查中的 R1–R8 未全部修复，发布说明明确披露，未扩大本轮为备份系统重构。
-- 版本：`0.7.0` 待发布，唯一来源为 `Directory.Build.props`；上一正式版为 `v0.6.2`。不得覆盖任何历史标签或资产。
-- 分支：`main`，优化提交基于 `9588a64`，正在按本轮授权提交推送。正式标签仍保持固定，候选标签为 `v0.7.0`。
+- 当前工作：按用户明确授权完成本批优化的提交、推送及 `v0.7.0` 正式发布。产品提交 `d529bc2e3e732387fd8f119867dfbfaf19c52fdb`，Actions Run `42583736949` completed/success；Release `438870541` 已公开且 latest 指向 `v0.7.0`。8 个正式资产全部下载并逐项核对 digest/SHA256SUMS，三份清单正式验签通过，兼容清单与 Lite 清单逐字节一致；原始 `0.6.2` Lite/Full 旧程序与更新器均完成隔离升级/ready/清理验证，公开后旧 Core 还完成真实 HTTPS latest 获取、下载和预检。详见 [发布核验](docs/releases/v0.7.0-verification.md)。
+- 版本：`0.7.0` 正式版，唯一来源为 `Directory.Build.props`；上一正式版为 `v0.6.2`。不得覆盖历史标签或资产。
+- 分支：`main`；产品提交与 `v0.7.0` 标签固定为 `d529bc2`，其后只追加发布核验文档提交。优化、桌面测试和发布记录已推送，可跨设备接续。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
-- 上一正式版本：`v0.6.1`，标签提交 `260fb05`；当前正式版本为 `v0.6.2`。本轮通过 GitHub API 复核 latest 和 8 个 uploaded 资产，未重跑正式包下载验签或旧版升级。
+- 上一正式版本：`v0.6.2`，标签提交 `b68cc10`；当前正式版本为 `v0.7.0`，完整核验见发布文档。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。
 - `v0.1.0` 已保留为失败发布标签；Actions Run `32558765725` 因 CI 未把 Chocolatey 的 ISCC 路径传给构建脚本而失败，线上没有 `v0.1.0` Release。
 - `v0.1.1` Actions Run `32559042297` 已完成且结论为 success；正式 Release 为 `https://github.com/Kratosmax/PathEcho/releases/tag/v0.1.1`，latest 已指向该版本。
