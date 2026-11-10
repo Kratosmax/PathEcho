@@ -6,6 +6,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function Compress-PackageWithRetry([string]$SourceDirectory, [string]$DestinationPath, [string]$AllowedRoot) {
+    $resolvedDestination = [IO.Path]::GetFullPath($DestinationPath)
+    $allowedPrefix = [IO.Path]::GetFullPath($AllowedRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedDestination.StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetExtension($resolvedDestination) -ne ".zip") { throw "Unsafe package archive target." }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Compress-Archive -Path (Join-Path $SourceDirectory "*") -DestinationPath $resolvedDestination -CompressionLevel Optimal -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -ge 3) { throw }
+            if (Test-Path -LiteralPath $resolvedDestination) { Remove-Item -LiteralPath $resolvedDestination -Force }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
+
 $repository = Split-Path -Parent $PSScriptRoot
 $version = ([xml](Get-Content -Raw -LiteralPath (Join-Path $repository "Directory.Build.props"))).Project.PropertyGroup.Version
 $tempRoot = [IO.Path]::GetFullPath((Join-Path $repository "temp"))
@@ -53,7 +71,7 @@ $newLine = [Environment]::NewLine
 [IO.File]::WriteAllText((Join-Path $packageRoot "Start-Preview.cmd"), "@echo off" + $newLine + 'start "" "%~dp0PathEcho.exe" --preview --preview-seed' + $newLine, [Text.Encoding]::ASCII)
 [IO.File]::WriteAllText((Join-Path $packageRoot "README-PREVIEW.txt"), "PathEcho local preview - not an official Release." + $newLine + "Run Start-Preview.cmd to view isolated sample data without reading or changing your normal configuration." + $newLine + "Requires .NET 8 Desktop Runtime x64. Run PathEcho.exe for normal operation." + $newLine, [Text.UTF8Encoding]::new($false))
 
-Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $archive -CompressionLevel Optimal
+Compress-PackageWithRetry $packageRoot $archive $previewRoot
 $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
 [IO.File]::WriteAllText("$archive.sha256", "$hash  $([IO.Path]::GetFileName($archive))$newLine", [Text.UTF8Encoding]::new($false))
 

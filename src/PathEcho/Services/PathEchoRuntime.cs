@@ -6,6 +6,8 @@ using System.Runtime.CompilerServices;
 using System.Windows;
 using PathEcho.Core.Backup;
 using PathEcho.Core.GameCatalog;
+using PathEcho.Core.Diagnostics;
+using System.Reflection;
 using PathEcho.Core.Models;
 using PathEcho.Core.Restore;
 using PathEcho.Core.Storage;
@@ -17,7 +19,7 @@ using PathEcho.Platform.Windows.Startup;
 
 namespace PathEcho.Services;
 
-public sealed class PathEchoRuntime : IAsyncDisposable
+public sealed partial class PathEchoRuntime : IAsyncDisposable
 {
     private readonly bool _previewMode;
     private readonly bool _previewSeed;
@@ -38,6 +40,12 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     private readonly SemaphoreSlim _historyGate = new(1, 1);
     private Task? _historyPolling;
     private bool _disposed;
+    private readonly LocalDiagnosticJournal _diagnosticJournal;
+    private long _configRevision;
+    private IReadOnlyList<HistoryScanReport> _historyReports = Array.Empty<HistoryScanReport>();
+    private Guid _lastHistoryOperationId;
+    private string? _lastPresentation;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, Guid> _profileOperations = new();
     private int _directoryRefreshRunning;
 
     public PathEchoRuntime(bool previewMode, bool previewSeed = false)
@@ -46,6 +54,11 @@ public sealed class PathEchoRuntime : IAsyncDisposable
     }
 
     internal PathEchoRuntime(bool previewMode, bool previewSeed, Func<string, bool> directoryExists)
+        : this(previewMode, previewSeed, directoryExists, null)
+    {
+    }
+
+    internal PathEchoRuntime(bool previewMode, bool previewSeed, Func<string, bool> directoryExists, string? diagnosticDirectory)
     {
         _directoryExists = directoryExists ?? throw new ArgumentNullException(nameof(directoryExists));
         _lifetimeToken = _stopping.Token;
@@ -57,11 +70,18 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         _configurationStore = new JsonConfigurationStore(Path.Combine(_dataRoot, "configuration.json"));
         _baselineStore = new SyncBaselineStore(Path.Combine(_dataRoot, "state", "baselines"));
         _syncRunHistoryStore = new SyncRunHistoryStore(Path.Combine(_dataRoot, "state", "sync-runs.json"));
+        _diagnosticJournal = new LocalDiagnosticJournal(diagnosticDirectory ?? (_previewMode
+            ? Path.Combine(Path.GetTempPath(), "PathEcho-Preview-Diagnostics", Environment.ProcessId.ToString())
+            : Path.Combine(_dataRoot, "Diagnostics")));
     }
 
     public AppConfiguration Configuration { get; private set; } = new();
 
     public bool IsPreviewMode => _previewMode;
+
+    public IReadOnlyList<HistoryScanReport> HistoryReports => _historyReports;
+
+    public event EventHandler? HistoryDiagnosticsChanged;
 
     public ObservableCollection<SyncTaskRow> SyncTasks { get; } = new();
 
@@ -192,16 +212,28 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         }
     }
 
-    public async Task AddGameProfileAsync(GameBackupProfile profile, CancellationToken cancellationToken = default)
+    public async Task AddGameProfileAsync(GameBackupProfile profile, CancellationToken cancellationToken = default, Guid? diagnosticOperationId = null)
     {
+        var operationId = diagnosticOperationId ?? BeginDiagnosticOperation("profile.create", profile.Id);
         profile.Validate();
         var updatedConfiguration = Configuration with
         {
             GameProfiles = Configuration.GameProfiles.Append(profile).ToArray(),
         };
         ValidateSharedBackupDirectories(updatedConfiguration);
-        await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            RecordDiagnostic(operationId, null, profile.Id, "config.persisted", "Failed", exception.GetType().Name);
+            throw;
+        }
         Configuration = updatedConfiguration;
+        _profileOperations[profile.Id] = operationId;
+        RecordDiagnostic(operationId, null, profile.Id, "config.persisted", "Completed",
+            path: profile.ResolveBackupDirectory(updatedConfiguration.DefaultBackupDirectory));
         await InvokeOnUiAsync(() => GameProfiles.Add(new GameProfileRow(profile)));
         AppLogger.Debug($"Game profile created: {profile.Id:N}.");
         if (!_previewMode && profile.IsEnabled)
@@ -212,6 +244,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
 
     public async Task UpdateGameProfileAsync(GameBackupProfile profile, CancellationToken cancellationToken = default)
     {
+        var operationId = BeginDiagnosticOperation("profile.edit", profile.Id);
         profile.Validate();
         var previous = Configuration.GameProfiles.SingleOrDefault(item => item.Id == profile.Id)
             ?? throw new InvalidOperationException("要编辑的游戏存档不存在。");
@@ -221,6 +254,7 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         });
         var oldBackupRoot = previous.ResolveBackupDirectory(Configuration.DefaultBackupDirectory);
         var newBackupRoot = profile.ResolveBackupDirectory(Configuration.DefaultBackupDirectory);
+        RecordDiagnostic(operationId, null, profile.Id, "config.previous-root", "Observed", path: oldBackupRoot);
         var backupRootChanged = !string.Equals(oldBackupRoot, newBackupRoot, StringComparison.OrdinalIgnoreCase);
         var manager = new BackupDirectoryManager();
         var moved = false;
@@ -251,9 +285,12 @@ public sealed class PathEchoRuntime : IAsyncDisposable
             };
             await PersistConfigurationAsync(updatedConfiguration, cancellationToken).ConfigureAwait(false);
             Configuration = updatedConfiguration;
+            _profileOperations[profile.Id] = operationId;
+            RecordDiagnostic(operationId, null, profile.Id, "config.persisted", "Completed", path: newBackupRoot);
         }
         catch (Exception updateException)
         {
+            RecordDiagnostic(operationId, null, profile.Id, "config.persisted", "Failed", updateException.GetType().Name);
             Exception? rollbackException = null;
             if (moved)
             {
@@ -615,12 +652,13 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         return new SettingsSaveResult(backupRootChanged, movedProfiles.Count, profilesWithoutBackups, startupWarning);
     }
 
-    public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
+    public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default, bool forceDiscovery = false, Guid? parentOperationId = null, bool periodic = false)
     {
         await _historyGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await LoadHistoryAsync(cancellationToken).ConfigureAwait(false);
+            if (forceDiscovery) _snapshotStore.InvalidateHistoryLocations();
+            await LoadHistoryAsync(cancellationToken, parentOperationId, periodic).ConfigureAwait(false);
         }
         finally
         {
@@ -718,78 +756,13 @@ public sealed class PathEchoRuntime : IAsyncDisposable
                 await RefreshSyncDirectoryStatesAsync(cancellationToken).ConfigureAwait(false);
                 if (Configuration.GameProfiles.Any(profile => profile.IncludeOtherDeviceBackups || profile.LinkedBackupProfileIds.Count > 0))
                 {
-                    await RefreshHistorySafelyAsync(cancellationToken).ConfigureAwait(false);
+                    await RefreshHistorySafelyAsync(cancellationToken, periodic: true).ConfigureAwait(false);
                 }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
-    }
-
-    private async Task LoadHistoryAsync(CancellationToken cancellationToken)
-    {
-        if (_previewMode)
-        {
-            await InvokeOnUiAsync(() =>
-            {
-                History.Clear();
-                if (_previewSeed)
-                {
-                    foreach (var row in CreatePreviewHistory())
-                    {
-                        History.Add(row);
-                    }
-                }
-            });
-            return;
-        }
-
-        var rows = new List<HistoryRow>();
-        foreach (var profile in Configuration.GameProfiles)
-        {
-            var backupRoot = profile.ResolveBackupDirectory(Configuration.DefaultBackupDirectory);
-            try
-            {
-                var includeOtherProfiles = profile.IncludeOtherDeviceBackups && profile.HasDedicatedBackupDirectory(Configuration);
-                foreach (var version in await _snapshotStore.ListAsync(
-                    profile.Id, backupRoot, cancellationToken, includeOtherProfiles).ConfigureAwait(false))
-                {
-                    rows.Add(new HistoryRow(profile, version));
-                }
-                if (!includeOtherProfiles)
-                {
-                    foreach (var linkedId in profile.LinkedBackupProfileIds.Distinct().Where(id => id != profile.Id))
-                    {
-                        foreach (var version in await _snapshotStore.ListAsync(linkedId, backupRoot, cancellationToken).ConfigureAwait(false))
-                        {
-                            rows.Add(new HistoryRow(profile, version));
-                        }
-                    }
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
-            {
-                AppLogger.Error($"Backup history load failed for profile {profile.Id:N}.", exception);
-                SetGameStatus(profile.Id, "历史读取失败");
-            }
-        }
-
-        await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-        {
-            var ordered = rows.OrderByDescending(row => row.CreatedAtUtc).ToArray();
-            if (History.Select(row => (row.Profile, row.SnapshotDirectory, row.Version.IsContentAvailable))
-                .SequenceEqual(ordered.Select(row => (row.Profile, row.SnapshotDirectory, row.Version.IsContentAvailable))))
-            {
-                return;
-            }
-
-            History.Clear();
-            foreach (var row in ordered)
-            {
-                History.Add(row);
-            }
-        });
     }
 
     public async Task RefreshSyncRunHistoryAsync(CancellationToken cancellationToken = default)
@@ -1078,11 +1051,11 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         });
     }
 
-    private async Task RefreshHistorySafelyAsync(CancellationToken cancellationToken = default)
+    private async Task RefreshHistorySafelyAsync(CancellationToken cancellationToken = default, bool periodic = false)
     {
         try
         {
-            await RefreshHistoryAsync(cancellationToken).ConfigureAwait(false);
+            await RefreshHistoryAsync(cancellationToken, periodic: periodic).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1264,8 +1237,11 @@ public sealed class PathEchoRuntime : IAsyncDisposable
         }
     }
 
-    private Task PersistConfigurationAsync(AppConfiguration configuration, CancellationToken cancellationToken) =>
-        _previewMode ? Task.CompletedTask : _configurationStore.SaveAsync(configuration, cancellationToken);
+    private async Task PersistConfigurationAsync(AppConfiguration configuration, CancellationToken cancellationToken)
+    {
+        if (!_previewMode) await _configurationStore.SaveAsync(configuration, cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _configRevision);
+    }
 
     private void EnsureNotPreview(string message)
     {

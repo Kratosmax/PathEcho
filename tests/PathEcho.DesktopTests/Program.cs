@@ -13,6 +13,7 @@ using PathEcho.Services;
 using Application = System.Windows.Application;
 using Button = System.Windows.Controls.Button;
 using ComboBox = System.Windows.Controls.ComboBox;
+using TextBox = System.Windows.Controls.TextBox;
 using Point = System.Windows.Point;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
 using BindingFlags = System.Reflection.BindingFlags;
@@ -33,6 +34,8 @@ internal static class Program
                 LoadResources(app);
                 await LayoutAsync();
                 await RuntimeAsync();
+                await ImportedProfileHistoryAsync();
+                await MissingManifestDiagnosticsAsync();
                 await NotificationAsync();
                 var output = JsonSerializer.Serialize(Results, new JsonSerializerOptions { WriteIndented = true });
                 await File.WriteAllTextAsync(args.ElementAtOrDefault(0) ?? "temp/desktop-tests/results.json", output);
@@ -109,14 +112,179 @@ internal static class Program
         window.Close(); // The harness uses a plain Application, so production close-to-tray is not active.
     }
 
+    private static async Task MissingManifestDiagnosticsAsync()
+    {
+        var root = Path.GetFullPath(Path.Combine("temp", "desktop-tests", "missing-manifest-" + Guid.NewGuid().ToString("N")));
+        var id = Guid.NewGuid(); var backup = Path.Combine(root, "cloud");
+        var profile = new GameBackupProfile
+        {
+            Id = id,
+            Name = "清单同步验证",
+            SaveDirectory = Path.Combine(root, "save"),
+            BackupDirectory = backup,
+            Triggers = BackupTrigger.ChangedFiles
+        };
+        var snapshot = Path.Combine(backup, id.ToString("N"), "snapshots", "20261110-synchronizing");
+        Directory.CreateDirectory(snapshot);
+        var diagnostics = Path.Combine(root, "diagnostics");
+        await using var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null,
+            new object[] { false, false, (Func<string, bool>)Directory.Exists, diagnostics }, null)!;
+        typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime,
+            new AppConfiguration { EnableDebugLogging = false, GameProfiles = [profile] });
+        runtime.GameProfiles.Add(new GameProfileRow(profile));
+        AppLogger.Configure(false);
+        await runtime.CheckHistoryAsync();
+        Assert(runtime.History.Count == 0 && runtime.HistoryReports.Single().Summary.AwaitingManifest == 1,
+            "An existing snapshot without its manifest was hidden or became an executable version.");
+        var logPath = Path.Combine(diagnostics, "diagnostics.jsonl");
+        var periodicMethod = typeof(PathEchoRuntime).GetMethod("RefreshHistorySafelyAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await (Task)periodicMethod.Invoke(runtime, new object[] { CancellationToken.None, true })!;
+        var afterFirstPoll = File.ReadAllLines(logPath).Length;
+        await (Task)periodicMethod.Invoke(runtime, new object[] { CancellationToken.None, true })!;
+        Assert(File.ReadAllLines(logPath).Length == afterFirstPoll, "Repeated periodic scan bypassed default journal deduplication.");
+        Assert(File.Exists(logPath) && (await File.ReadAllTextAsync(logPath)).Contains("MANIFEST_MISSING", StringComparison.Ordinal),
+            "Debug-off mode lost the missing-manifest evidence.");
+        var window = new PathEcho.MainWindow(runtime) { Width = 1180, Height = 760 };
+        window.Show(); window.SelectPreviewView("History"); await Idle();
+        Assert(((TextBlock)window.FindName("HistoryEmptyTitle")).Text.Contains("清单", StringComparison.Ordinal),
+            "Actual history view still described a missing manifest as no backups.");
+        Assert(((TextBlock)window.FindName("HistoryDiagnosticSummary")).Text.Contains("1 个等待备份清单", StringComparison.Ordinal),
+            "Actual history view omitted pending metadata count.");
+        await CaptureAsync(window, "temp/desktop-tests/missing-manifest-history.png");
+        window.Width = 920; window.Height = 620; await Idle();
+        await CaptureAsync(window, "temp/desktop-tests/missing-manifest-history-920.png");
+        var dialog = new PathEcho.Dialogs.HistoryDiagnosticsWindow(runtime) { Owner = window };
+        dialog.Show(); await Idle();
+        Assert(((TextBox)dialog.FindName("DetailsBox")).Text.Contains("MANIFEST_MISSING", StringComparison.Ordinal),
+            "Diagnostic window did not show the structured reason.");
+        Assert(((System.Windows.Controls.CheckBox)dialog.FindName("IncludePathsCheck")).IsChecked != true,
+            "Original paths were opted in by default.");
+        await CaptureAsync(dialog, "temp/desktop-tests/missing-manifest-diagnostic.png");
+        var zip = Path.Combine(root, "diagnostics.zip");
+        await runtime.ExportHistoryDiagnosticsAsync(zip);
+        using (var archive = System.IO.Compression.ZipFile.OpenRead(zip))
+        {
+            Assert(archive.Entries.Count == 5, "Runtime export included unexpected files.");
+            foreach (var entry in archive.Entries)
+            {
+                using var reader = new StreamReader(entry.Open());
+                var text = await reader.ReadToEndAsync();
+                Assert(!text.Contains(root, StringComparison.OrdinalIgnoreCase) && !text.Contains(id.ToString("N"), StringComparison.OrdinalIgnoreCase),
+                    "Runtime export leaked the source path or identity.");
+            }
+        }
+        dialog.Close();
+        var bytes = System.Text.Encoding.UTF8.GetBytes("progress");
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+        var manifest = new PathEcho.Core.Backup.SnapshotManifest
+        {
+            ProfileId = id,
+            CreatedAtUtc = DateTimeOffset.UtcNow,
+            Trigger = "fixture",
+            Files = [new() { RelativePath = "slot.sav", Sha256 = hash, Length = bytes.Length, LastWriteUtcTicks = DateTime.UtcNow.Ticks }],
+        };
+        await File.WriteAllTextAsync(Path.Combine(snapshot, "manifest.json"), System.Text.Json.JsonSerializer.Serialize(manifest));
+        await runtime.CheckHistoryAsync();
+        Assert(runtime.History.Count == 1 && !runtime.History[0].IsContentAvailable && runtime.HistoryReports.Single().Summary.AwaitingContent == 1,
+            "Arriving metadata did not transition to pending content.");
+        var blob = PathEcho.Core.Backup.SnapshotContent.GetObjectPath(Path.Combine(backup, id.ToString("N")), hash);
+        Directory.CreateDirectory(Path.GetDirectoryName(blob)!); await File.WriteAllBytesAsync(blob, bytes);
+        await runtime.CheckHistoryAsync(); await Idle();
+        Assert(runtime.History.Single().IsContentAvailable && runtime.HistoryReports.Single().Summary.ReadyVersions == 1,
+            "Arriving content did not recover the actual Runtime/UI state.");
+        ((TextBox)window.FindName("HistorySearchBox")).Text = "not-a-matching-game"; await Idle();
+        Assert(((FrameworkElement)window.FindName("HistoryNoResults")).Visibility == Visibility.Visible,
+            "Filtered-out results were confused with missing backup data.");
+        Assert((await File.ReadAllTextAsync(logPath)).Contains("RESULT_FILTERED_OUT", StringComparison.Ordinal),
+            "Filtered-out results had no diagnostic evidence.");
+        window.Close();
+        Assert(!Directory.Exists(profile.SaveDirectory), "Diagnostics touched the actual save path.");
+        Results.Add(new
+        {
+            probe = "missing_manifest_real_ui_and_export",
+            candidate = 1,
+            waitingManifest = 1,
+            noExecutableVersionWithoutManifest = true,
+            debugOffEvidence = true,
+            defaultRedactedZip = true,
+            metadataArrivesThenContentReady = true,
+            filterReasonRecorded = true
+        });
+    }
+
+    private static async Task ImportedProfileHistoryAsync()
+    {
+        var root = Path.GetFullPath(Path.Combine("temp", "desktop-tests", "import-history-" + Guid.NewGuid().ToString("N")));
+        var sourceSave = Path.Combine(root, "old-save");
+        var oldBackup = Path.Combine(root, "old-backup");
+        var newBackup = Path.Combine(root, "new-backup");
+        Directory.CreateDirectory(sourceSave);
+        await File.WriteAllTextAsync(Path.Combine(sourceSave, "slot.sav"), "switch progress");
+        var original = new GameBackupProfile
+        {
+            Id = Guid.Parse("9b74b71f-244f-47da-84c6-7e0abff7f3e3"),
+            Name = "switch2模拟器存档",
+            SaveDirectory = sourceSave,
+            BackupDirectory = oldBackup,
+            IncludeOtherDeviceBackups = true,
+            Triggers = BackupTrigger.ChangedFiles,
+        };
+        await new PathEcho.Core.Backup.SnapshotStore().CreateAsync(original.Id, sourceSave, oldBackup, "导入回归");
+        var export = Path.Combine(root, "game.pathecho-game.json");
+        await PathEcho.Core.Storage.GameProfileTransfer.ExportAsync(original, oldBackup, export);
+        var draft = await PathEcho.Core.Storage.GameProfileTransfer.ReadImportDraftAsync(export, []);
+        Directory.Move(oldBackup, newBackup);
+        var nestedRoot = Path.Combine(newBackup, "PathEcho", original.Id.ToString("D"));
+        Directory.CreateDirectory(Path.GetDirectoryName(nestedRoot)!);
+        Directory.Move(Path.Combine(newBackup, original.Id.ToString("N")), nestedRoot);
+        var dialog = new PathEcho.Dialogs.GameProfileEditorWindow(draft, importing: true);
+        ((TextBox)dialog.FindName("SavePathBox")).Text = Path.Combine(root, "new-local-save");
+        ((TextBox)dialog.FindName("BackupPathBox")).Text = newBackup;
+        _ = dialog.Dispatcher.BeginInvoke(() => ((Button)dialog.FindName("SubmitButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)), DispatcherPriority.ApplicationIdle);
+        Assert(dialog.ShowDialog() == true && dialog.Result is not null, "Import confirmation did not produce a profile.");
+        var profile = dialog.Result!;
+        Assert(profile.LinkedBackupProfileIds.Contains(original.Id) && profile.Id == draft.Id, "Confirmation dropped source identity after path edits.");
+        var config = new AppConfiguration { DefaultBackupDirectory = Path.Combine(root, "default-backup"), GameProfiles = [profile] };
+        var store = new PathEcho.Core.Storage.JsonConfigurationStore(Path.Combine(root, "configuration.json"));
+        await store.SaveAsync(config);
+        config = await store.LoadAsync();
+        await using var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null,
+            new object[] { false, false, (Func<string, bool>)Directory.Exists, Path.Combine(root, "diagnostics") }, null)!;
+        // No Initialize: inject only a test configuration, avoiding real config, startup registration and monitors.
+        typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime, config);
+        runtime.GameProfiles.Add(new GameProfileRow(config.GameProfiles.Single()));
+        await runtime.RefreshHistoryAsync();
+        Assert(runtime.History.Count == 1 && runtime.History[0].Version.Manifest.ProfileId == original.Id,
+            "Runtime failed to read the imported source after confirmation, path changes and reload.");
+        Assert(runtime.History[0].Profile.SaveDirectory == profile.SaveDirectory && runtime.History[0].IsContentAvailable,
+            "Imported history did not target the new local save directory.");
+        var window = new PathEcho.MainWindow(runtime) { Width = 1180, Height = 760 };
+        window.Show(); window.SelectPreviewView("History"); await Idle();
+        await CaptureAsync(window, "temp/desktop-tests/imported-history.png");
+        window.Close();
+        Assert(!Directory.Exists(profile.SaveDirectory), "History lookup created or changed the local save directory.");
+        Results.Add(new
+        {
+            probe = "import_confirm_change_paths_reload_history",
+            actualImportDialog = true,
+            linkedSourcePreserved = true,
+            backupPathChanged = true,
+            savePathChanged = true,
+            nestedHyphenatedBackup = true,
+            historyVersions = runtime.History.Count,
+            noRealConfiguration = true
+        });
+    }
+
     private static async Task RuntimeAsync()
     {
+        var diagnosticRoot = Path.GetFullPath(Path.Combine("temp", "desktop-tests", "runtime-diagnostics-" + Guid.NewGuid().ToString("N")));
         using var release = new ManualResetEventSlim();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var probeExited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var count = 0;
         Func<string, bool> probe = _ => { Interlocked.Increment(ref count); entered.TrySetResult(); release.Wait(); probeExited.TrySetResult(); return true; };
-        var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { false, false, probe }, null)!;
+        var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { false, false, probe, Path.Combine(diagnosticRoot, "normal") }, null)!;
         var row = new SyncTaskRow(new PathEcho.Core.Models.SyncTaskDefinition { LeftPath = "mock-left", RightPath = "mock-right" });
         runtime.SyncTasks.Add(row);
         var first = runtime.RefreshSyncDirectoryStatesAsync();
@@ -132,7 +300,7 @@ internal static class Program
 
         using var releaseCanceled = new ManualResetEventSlim();
         var enteredCanceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var canceledRuntime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { false, false, (Func<string, bool>)(_ => { enteredCanceled.TrySetResult(); releaseCanceled.Wait(); return true; }) }, null)!;
+        var canceledRuntime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null, new object[] { false, false, (Func<string, bool>)(_ => { enteredCanceled.TrySetResult(); releaseCanceled.Wait(); return true; }), Path.Combine(diagnosticRoot, "canceled") }, null)!;
         canceledRuntime.SyncTasks.Add(new SyncTaskRow(new PathEcho.Core.Models.SyncTaskDefinition { LeftPath = "mock-left", RightPath = "mock-right" }));
         using var cts = new CancellationTokenSource();
         var canceled = canceledRuntime.RefreshSyncDirectoryStatesAsync(cts.Token);

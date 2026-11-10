@@ -17,10 +17,10 @@ dotnet --version
 
 ## 当前快照
 
-- 最后本地核验：2026-11-09，UTC+8。基线 main `9588a64` / `0.6.2`；性能/结构/界面改进已在本地完成，Release 构建 0 警告 0 错误、冒烟 46/46、真实桌面行为套件通过、格式与 whitespace 检查通过。本机 SDK `10.0.201`，产品目标仍为 .NET 8。
-- 当前工作：按用户明确授权完成本批优化的提交、推送及 `v0.7.0` 正式发布。产品提交 `d529bc2e3e732387fd8f119867dfbfaf19c52fdb`，Actions Run `42583736949` completed/success；Release `438870541` 已公开且 latest 指向 `v0.7.0`。8 个正式资产全部下载并逐项核对 digest/SHA256SUMS，三份清单正式验签通过，兼容清单与 Lite 清单逐字节一致；原始 `0.6.2` Lite/Full 旧程序与更新器均完成隔离升级/ready/清理验证，公开后旧 Core 还完成真实 HTTPS latest 获取、下载和预检。详见 [发布核验](docs/releases/v0.7.0-verification.md)。
-- 版本：`0.7.0` 正式版，唯一来源为 `Directory.Build.props`；上一正式版为 `v0.6.2`。不得覆盖历史标签或资产。
-- 分支：`main`；产品提交与 `v0.7.0` 标签固定为 `d529bc2`，其后只追加发布核验文档提交。优化、桌面测试和发布记录已推送，可跨设备接续。
+- 最后本地核验：2026-11-09，UTC+8。当前修复基线 main 5c8fa82 / 正式 0.7.0；本轮构建 0 警告 0 错误、Smoke 47/47 和 DesktopTests 通过，尚有未提交的导入历史修复。
+- 当前工作：用户明确授权实现快速诊断、测试后发布，现0.8.0候选已实现结构化HistoryScanReport、缺manifest待同步UI、检查/取消/打开问题目录、默认关键摘要/操作关联/周期去重、本地脱敏五文件ZIP导出，50项Smoke及真实Desktop回归与独立审查通过。本地四包构建及原始0.7.0两通道更新器预检通过，准备推送签名草稿，正式清单和升级链验证后才公开。见 [诊断设计](docs/design/rapid-diagnostics.md) 与 [0.8.0发布核验](docs/releases/v0.8.0-verification.md)。先前独立N/D/嵌套兼容性补丁一并测试，不将其认定为用户缺manifest的现场根因。
+- 版本：0.8.0候选，唯一来源Directory.Build.props；上一正式版v0.7.0。待发布完成再更新线上状态，不覆盖已有标签或资产。
+- 分支：main，本批诊断工作基于5c8fa82；尚待提交推送与v0.8.0标签触发云端草稿构建。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - 上一正式版本：`v0.6.2`，标签提交 `b68cc10`；当前正式版本为 `v0.7.0`，完整核验见发布文档。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。

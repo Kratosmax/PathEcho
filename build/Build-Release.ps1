@@ -8,6 +8,24 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+function Compress-PackageWithRetry([string]$SourceDirectory, [string]$DestinationPath, [string]$AllowedRoot) {
+    $resolvedDestination = [IO.Path]::GetFullPath($DestinationPath)
+    $allowedPrefix = [IO.Path]::GetFullPath($AllowedRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    if (-not $resolvedDestination.StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetExtension($resolvedDestination) -ne ".zip") { throw "Unsafe package archive target." }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Compress-Archive -Path (Join-Path $SourceDirectory "*") -DestinationPath $resolvedDestination -CompressionLevel Optimal -ErrorAction Stop
+            return
+        } catch {
+            if ($attempt -ge 3) { throw }
+            if (Test-Path -LiteralPath $resolvedDestination) { Remove-Item -LiteralPath $resolvedDestination -Force }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
+
 $repository = Split-Path -Parent $PSScriptRoot
 $version = ([xml](Get-Content -Raw -LiteralPath (Join-Path $repository "Directory.Build.props"))).Project.PropertyGroup.Version
 if ($ExpectedTag -and $ExpectedTag -ne "v$version") { throw "Tag $ExpectedTag does not match version $version." }
@@ -45,7 +63,7 @@ foreach ($channel in @("Lite", "Full")) {
     [IO.File]::WriteAllText((Join-Path $packageRoot ".pathecho-install-root"), "PathEcho`r`n", $utf8)
 
     $zip = Join-Path $resolvedRelease "PathEcho-$version-$channel.zip"
-    Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zip -CompressionLevel Optimal
+    Compress-PackageWithRetry $packageRoot $zip $resolvedRelease
     $packageHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
     $packagedUpdater = Join-Path $packageRoot "PathEcho.Updater.exe"
     & $packagedUpdater --package $zip --sha256 $packageHash --channel $channel --version $version --verify-only true

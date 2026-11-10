@@ -67,6 +67,8 @@ public partial class MainWindow : Window
         runtime.History.CollectionChanged += OnCollectionChanged;
         runtime.SyncRuns.CollectionChanged += OnCollectionChanged;
         runtime.SyncTaskStatesChanged += (_, _) => RefreshSyncFilter();
+        runtime.HistoryDiagnosticsChanged += OnHistoryDiagnosticsChanged;
+        Closed += (_, _) => runtime.HistoryDiagnosticsChanged -= OnHistoryDiagnosticsChanged;
         UpdateEmptyStates();
     }
 
@@ -121,7 +123,33 @@ public partial class MainWindow : Window
         HistoryGrid.Visibility = visibleHistoryCount == 0 ? Visibility.Collapsed : Visibility.Visible;
         SyncRunsEmpty.Visibility = _runtime.SyncRuns.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         SyncRunsGrid.Visibility = _runtime.SyncRuns.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        UpdateHistoryDiagnosticState();
+        _runtime.RecordHistoryPresentation(visibleHistoryCount, !string.IsNullOrWhiteSpace(HistorySearchBox.Text) ||
+            HistoryGameFilter.SelectedItem is HistoryGameFilterOption { ProfileId: not null });
     }
+
+    private void OnHistoryDiagnosticsChanged(object? sender, EventArgs e) => UpdateHistoryDiagnosticState();
+
+    private void UpdateHistoryDiagnosticState()
+    {
+        if (HistoryDiagnosticSummary is null) return;
+        var reports = _runtime.HistoryReports;
+        HistoryDiagnosticSummary.Text = HistoryDiagnosticPresentation.Summary(reports);
+        var visible = _historyView.Cast<object>().Count();
+        if (visible < _runtime.History.Count) HistoryDiagnosticSummary.Text += $" · 当前筛选显示 {visible}/{_runtime.History.Count} 个版本";
+        var missing = reports.Sum(report => report.Summary.AwaitingManifest);
+        var incomplete = reports.Any(report => !report.IsComplete);
+        var firstReason = reports.SelectMany(report => report.Issues.Concat(report.Inspections))
+            .FirstOrDefault(item => item.ReasonCode != "READY");
+        HistoryEmptyTitle.Text = missing > 0 ? "备份清单尚未同步" : incomplete ? "历史检查尚未完成" :
+            firstReason is not null ? "暂时没有可用的历史版本" : "还没有备份版本";
+        HistoryEmptyReason.Text = missing > 0
+            ? $"已发现 {missing} 个快照目录缺少 manifest.json。请等待云盘同步清单后重新检查；此时不能回档。"
+            : firstReason is not null ? HistoryDiagnosticPresentation.Reason(firstReason.ReasonCode)
+            : "当前目录尚未发现可用历史。可检查实际路径、来源关联与同步状态。";
+    }
+
+    private void OnHistoryDiagnostics(object sender, RoutedEventArgs e) => new HistoryDiagnosticsWindow(_runtime) { Owner = this }.ShowDialog();
 
     private void OnNavigate(object sender, RoutedEventArgs e)
     {
@@ -239,28 +267,48 @@ public partial class MainWindow : Window
 
     private async Task ImportGameConfigurationAsync(string fileName)
     {
+        var operationId = _runtime.BeginDiagnosticOperation("import.start");
         GameBackupProfile? draft = null;
         if (!await RunUiActionAsync("正在读取游戏配置", async () =>
         {
             draft = await GameProfileTransfer.ReadImportDraftAsync(fileName, _runtime.Configuration.GameProfiles);
         }) || draft is null)
         {
+            _runtime.RecordDiagnostic(operationId, null, null, "import.parsed", "Failed", "IMPORT_INVALID_OR_UNREADABLE");
             return;
         }
 
+        _runtime.RecordDiagnostic(operationId, null, draft.Id, "import.parsed", "Completed");
         var dialog = new GameProfileEditorWindow(draft, _runtime.Configuration.DefaultBackupNotification, importing: true) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.Result is null)
         {
+            _runtime.RecordDiagnostic(operationId, null, draft.Id, "import.confirmed", "Canceled");
             StatusText.Text = "已取消导入，未添加游戏档案";
             return;
         }
 
-        await RunUiActionAsync("正在导入游戏配置", async () =>
+        var imported = await RunUiActionAsync("正在导入游戏配置", async () =>
         {
-            await _runtime.AddGameProfileAsync(dialog.Result);
-            await _runtime.RefreshHistoryAsync();
-            StatusText.Text = $"已导入 {dialog.Result.Name}，历史已关联导出设备的备份";
+            _runtime.RecordDiagnostic(operationId, null, dialog.Result.Id, "import.confirmed", "Completed");
+            await _runtime.AddGameProfileAsync(dialog.Result, diagnosticOperationId: operationId);
+            await _runtime.RefreshHistoryAsync(parentOperationId: operationId);
+            ReportImportedGameHistory(dialog.Result, "已导入");
         });
+        _runtime.RecordDiagnostic(operationId, null, dialog.Result.Id, "import.completed", imported ? "Completed" : "Failed");
+    }
+
+    private void ReportImportedGameHistory(GameBackupProfile profile, string action)
+    {
+        var versions = _runtime.History.Where(row => row.Profile.Id == profile.Id).ToArray();
+        StatusText.Text = versions.Length == 0
+            ? $"{action} {profile.Name}，所选备份目录暂未找到历史版本"
+            : $"{action} {profile.Name}，找到 {versions.Length} 个历史版本";
+        if (versions.Length != 0) return;
+
+        var backupRoot = profile.ResolveBackupDirectory(_runtime.Configuration.DefaultBackupDirectory);
+        new PromptWindow(this, "配置已保存，尚未找到备份",
+            $"本机存档目录仅用于后续备份和回档，不会影响已有历史的识别。\n\n当前读取的备份目录：\n{backupRoot}\n\n请确认原设备的备份已经同步或复制到这个目录中，目录内应包含 snapshots 和 manifest.json。导入配置本身不包含存档数据；若只更改备份路径而未移动原有备份，程序不会自动从旧路径搬移关联设备的文件。",
+            "知道了").ShowDialog();
     }
 
     private async Task AddGameAsync(PathEcho.Core.GameCatalog.DiscoveredGame? discoveredGame = null)
@@ -381,7 +429,7 @@ public partial class MainWindow : Window
     {
         await RunUiActionAsync("正在刷新版本历史", async () =>
         {
-            await _runtime.RefreshHistoryAsync();
+            await _runtime.RefreshHistoryAsync(forceDiscovery: true);
             await _runtime.RefreshSyncRunHistoryAsync();
             StatusText.Text = $"已找到 {_runtime.History.Count} 个备份版本";
         });
@@ -874,7 +922,6 @@ public partial class MainWindow : Window
         if (await RunUiActionAsync("正在保存同步任务", () => _runtime.UpdateSyncTaskAsync(dialog.Result)))
         {
             StatusText.Text = $"{dialog.Result.Name} 已更新";
-            RefreshSyncFilter();
         }
     }
 
@@ -986,7 +1033,17 @@ public partial class MainWindow : Window
 
         if (await RunUiActionAsync("正在保存游戏存档", () => _runtime.UpdateGameProfileAsync(dialog.Result)))
         {
-            StatusText.Text = $"{dialog.Result.Name} 已更新";
+            var rootChanged = !string.Equals(
+                row.Definition.ResolveBackupDirectory(_runtime.Configuration.DefaultBackupDirectory),
+                dialog.Result.ResolveBackupDirectory(_runtime.Configuration.DefaultBackupDirectory), StringComparison.OrdinalIgnoreCase);
+            if (rootChanged && dialog.Result.LinkedBackupProfileIds.Count > 0)
+            {
+                ReportImportedGameHistory(dialog.Result, "已更新");
+            }
+            else
+            {
+                StatusText.Text = $"{dialog.Result.Name} 已更新";
+            }
         }
     }
 

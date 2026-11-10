@@ -1,0 +1,25 @@
+<Window x:Class="PathEcho.Dialogs.HistoryDiagnosticsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="备份历史诊断" Width="800" Height="650" MinWidth="640" MinHeight="520"
+        WindowStartupLocation="CenterOwner" Closing="OnClosing">
+    <Grid Margin="24">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <StackPanel><TextBlock Text="备份历史诊断" FontSize="24" FontWeight="SemiBold"/>
+            <TextBlock Text="检查实际保存的备份路径与同步状态，生成可分享的本地证据。" Style="{StaticResource PageDescription}"/></StackPanel>
+        <TextBlock x:Name="SummaryText" Grid.Row="1" TextWrapping="Wrap" Margin="0,18,0,12" FontWeight="SemiBold"/>
+        <TextBox x:Name="DetailsBox" Grid.Row="2" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top" Padding="12"/>
+        <StackPanel Grid.Row="3" Margin="0,14,0,0">
+            <TextBlock Text="导出预览：汇总、最近操作事件、有效配置概要、有限目录状态、版本环境。默认替换路径和 ID；不含存档、内容对象、完整配置或网络凭据，不会上传。" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+            <CheckBox x:Name="IncludePathsCheck" Content="在诊断包中包含原始本机路径、名称与档案/操作 ID（默认不包含）" Margin="0,8,0,0"/>
+            <TextBlock x:Name="ResultText" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,0"/>
+        </StackPanel>
+        <WrapPanel Grid.Row="4" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button x:Name="OpenFolderButton" Content="打开问题目录" Click="OnOpenFolder" Margin="0,0,8,8"/>
+            <Button x:Name="CheckButton" Content="重新检查" Click="OnCheck" Margin="0,0,8,8"/>
+            <Button x:Name="CancelCheckButton" Content="取消检查" Click="OnCancelCheck" IsEnabled="False" Margin="0,0,8,8"/>
+            <Button x:Name="ExportButton" Content="保存诊断 ZIP" Style="{StaticResource PrimaryButton}" Click="OnExport" Margin="0,0,8,8"/>
+            <Button Content="关闭" IsCancel="True" Margin="0,0,0,8"/>
+        </WrapPanel>
+    </Grid>
+</Window>

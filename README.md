@@ -1,6 +1,6 @@
 # PathEcho
 
-当前版本：`0.7.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
+当前版本：`0.8.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
 
 <img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
 
@@ -12,10 +12,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.7.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.7.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.7.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.7.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.8.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.8.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.8.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.8.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 
@@ -81,9 +81,17 @@ PathEcho 启动后可后台检查更新，也可在设置页手动检查。客�
 - 需要排查问题：在设置中启用 Debug 日志，日志写入 `%LocalAppData%\PathEcho\Logs`，最多保留 5 个滚动文件。
 - 回档提示文件占用：先正常退出游戏；需要结束进程时，PathEcho 会核对 PID 与启动时间并拒绝系统关键进程、自身进程和身份变化进程。
 
+## 快速检查历史与导出诊断
+
+当历史为空或云盘尚未同步完整时，版本历史会显示候选目录、可回档版本、等待清单和等待内容的数量。缺少 `manifest.json` 不再被静默解释成没有备份；该目录只作为待同步候选，清单与内容到齐后再恢复操作。
+
+在“版本历史”或“设置 → 诊断”点击“检查与导出诊断”，可查看实际读取路径、来源及各阶段原因，重新检查或取消，并在内容预览后保存本地 ZIP。默认使用路径、名称和 ID 别名，不包含存档、对象文件、完整配置或网络凭据，也不会自动上传；只有主动勾选后才包含原始路径与名称。
+
+关键摘要日志默认记录在 `%LocalAppData%\PathEcho\Diagnostics\diagnostics.jsonl`，独立于 Debug 开关；相同周期结果去重，文件按大小轮转。诊断只检查元数据，不代表恢复前内容哈希校验已经完成。取消、超时、受限扫描会明确标记不完整，不能据此判断数据不存在。
+
 ## 本版优化与核验
 
-本版已完成目录排除剪枝与有界缓存、通知按到期调度、同步状态模型拆分及目录状态后台刷新，并改善表格、工具栏、设置页固定保存区与下拉框样式。实测数据、验证范围和本地 Lite 预览说明见 [优化交付记录](docs/reviews/2026-11-09-optimization.md)。当前正式版本为 `0.7.0`，资产、签名和升级核验见 [发布核验记录](docs/releases/v0.7.0-verification.md)。
+本版已完成目录排除剪枝与有界缓存、通知按到期调度、同步状态模型拆分及目录状态后台刷新，并改善表格、工具栏、设置页固定保存区与下拉框样式。实测数据、验证范围和本地 Lite 预览说明见 [优化交付记录](docs/reviews/2026-11-09-optimization.md)。当前正式版本为 `0.8.0`，资产、签名和升级核验见 [发布核验记录](docs/releases/v0.8.0-verification.md)。
 
 窗口右上角关闭会隐藏到托盘继续监听；需要完全退出时使用托盘菜单的退出入口。
 

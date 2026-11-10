@@ -21,6 +21,9 @@ Directory.CreateDirectory(testRoot);
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("配置可原子保存并读取", TestConfigurationStoreAsync),
+    ("默认诊断摘要可去重轮转且写入失败仍保留证据", () => DiagnosticJournalTests.RunAsync(testRoot)),
+    ("诊断ZIP仅导出白名单且默认脱敏并支持取消", () => DiagnosticExportTests.RunAsync(testRoot)),
+    ("历史诊断区分缺清单、损坏、身份与内容并可到齐恢复", () => HistoryScanTests.RunAsync(testRoot)),
     ("目录剪枝保持过滤语义且扫描缓存有界", () => ScannerOptimizationTests.RunAsync(testRoot)),
     ("通知队列可合并续期并按最早到期调度", NotificationQueueTests.RunAsync),
     ("同步状态独立于文案且目录状态可刷新", () => RuntimeRowTests.RunAsync(testRoot)),
@@ -32,6 +35,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("游戏快照可去重、浏览并清理旧版本", TestSnapshotStoreAsync),
     ("跨设备历史兼容不同 ID、分批到达并可手动回档", TestSharedBackupHistoryAsync),
     ("游戏配置可跨设备导出导入并拒绝重复和无效文件", TestGameProfileTransferAsync),
+    ("导入后更改目录仍可识别关联历史与云同步状态", () => ImportedBackupDiscoveryTests.RunAsync(testRoot)),
     ("快照按最近、每小时和每日分层保留", TestSnapshotRetentionPlannerAsync),
     ("增量快照可记录改名删除并兼容旧版本", TestIncrementalAndLegacySnapshotAsync),
     ("备份失败会完整暂存并恢复写入", TestBackupRetryRecoveryAsync),
