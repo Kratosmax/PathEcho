@@ -9,7 +9,8 @@ on:
         description: Original previous public release tag
         required: true
 permissions:
-  contents: read
+  # Writer visibility is required to read an unpublished draft; this job performs no repository writes.
+  contents: write
 jobs:
   upgrade:
     runs-on: windows-latest
