@@ -1,0 +1,39 @@
+name: Verify published upgrade
+on:
+  workflow_dispatch:
+    inputs:
+      current_tag:
+        description: Signed draft or public release tag
+        required: true
+      previous_tag:
+        description: Original previous public release tag
+        required: true
+permissions:
+  contents: read
+jobs:
+  upgrade:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 8.0.424
+      - name: Verify original-client full upgrades
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_TAG: ${{ inputs.current_tag }}
+          PREVIOUS_TAG: ${{ inputs.previous_tag }}
+        run: ./build/Verify-ReleaseUpgrade.ps1 -CurrentTag $env:CURRENT_TAG -PreviousTag $env:PREVIOUS_TAG
+      - name: Preserve upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-client-upgrade-evidence
+          if-no-files-found: ignore
+          path: |
+            temp/upgrade-acceptance-*/*.log
+            temp/upgrade-tests/**/report.json
+            temp/upgrade-tests/**/updated-preview.png
+            temp/upgrade-tests/**/logs/*.log
