@@ -1,0 +1,88 @@
+{
+  "SchemaVersion": 1,
+  "Revision": 1,
+  "Games": [
+    {
+      "Id": "minecraft-java",
+      "Name": "Minecraft: Java Edition",
+      "Executables": [
+        "Minecraft.exe"
+      ],
+      "SavePathTemplates": [
+        "{RoamingAppData}\\.minecraft\\saves"
+      ]
+    },
+    {
+      "Id": "stardew-valley",
+      "Name": "Stardew Valley",
+      "Executables": [
+        "Stardew Valley.exe"
+      ],
+      "SavePathTemplates": [
+        "{RoamingAppData}\\StardewValley\\Saves"
+      ]
+    },
+    {
+      "Id": "terraria",
+      "Name": "Terraria",
+      "Executables": [
+        "Terraria.exe"
+      ],
+      "SavePathTemplates": [
+        "{Documents}\\My Games\\Terraria"
+      ]
+    },
+    {
+      "Id": "cyberpunk-2077",
+      "Name": "Cyberpunk 2077",
+      "Executables": [
+        "Cyberpunk2077.exe"
+      ],
+      "SavePathTemplates": [
+        "{SavedGames}\\CD Projekt Red\\Cyberpunk 2077"
+      ]
+    },
+    {
+      "Id": "the-witcher-3",
+      "Name": "The Witcher 3",
+      "Executables": [
+        "witcher3.exe"
+      ],
+      "SavePathTemplates": [
+        "{Documents}\\The Witcher 3\\gamesaves"
+      ]
+    },
+    {
+      "Id": "hollow-knight",
+      "Name": "Hollow Knight",
+      "Executables": [
+        "hollow_knight.exe"
+      ],
+      "SavePathTemplates": [
+        "{UserProfile}\\AppData\\LocalLow\\Team Cherry\\Hollow Knight"
+      ]
+    },
+    {
+      "Id": "palworld",
+      "Name": "Palworld",
+      "Executables": [
+        "Palworld-Win64-Shipping.exe"
+      ],
+      "SavePathTemplates": [
+        "{LocalAppData}\\Pal\\Saved\\SaveGames"
+      ]
+    },
+    {
+      "Id": "baldurs-gate-3",
+      "Name": "Baldur\u0027s Gate 3",
+      "Executables": [
+        "bg3.exe",
+        "bg3_dx11.exe"
+      ],
+      "SavePathTemplates": [
+        "{LocalAppData}\\Larian Studios\\Baldur\u0027s Gate 3\\PlayerProfiles"
+      ]
+    }
+  ],
+  "Signature": "MEYCIQCRX3lJjPlwg7H4awubxKBJ7WR4fKRuVA4lpUknPw\u002BKogIhANJknbQ0C3ZompJafPCpMtjbiJqXP5Dvq81ULbpbeYaB"
+}
