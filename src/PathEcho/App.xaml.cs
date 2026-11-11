@@ -94,7 +94,7 @@ public partial class App : System.Windows.Application
         SignalUpdateReady(e.Args);
         ShowUpdateResult(e.Args);
 
-        if (!previewMode && _runtime.Configuration.CheckForUpdates)
+        if (!previewMode)
         {
             _ = _mainWindow.CheckForUpdatesInBackgroundAsync();
         }

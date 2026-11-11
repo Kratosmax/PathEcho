@@ -61,9 +61,15 @@ public static partial class GameCatalogVerifier
 
     public static GameCatalogDocument ParseAndVerify(string json, string publicKeyPem = UpdateTrust.PublicKeyPem)
     {
-        var catalog = JsonSerializer.Deserialize<GameCatalogDocument>(json, SerializerOptions)
+        GameCatalogDocument catalog;
+        try
+        {
+            catalog = JsonSerializer.Deserialize<GameCatalogDocument>(json, SerializerOptions)
             ?? throw new InvalidDataException("游戏目录内容为空。");
+        }
+        catch (JsonException exception) { throw new InvalidDataException("游戏目录 JSON 无效或尚未到齐。", exception); }
         Validate(catalog);
+        if (string.IsNullOrEmpty(catalog.Signature)) throw new InvalidDataException("游戏目录缺少签名。");
 
         byte[] signature;
         try
@@ -91,7 +97,7 @@ public static partial class GameCatalogVerifier
 
     public static void Validate(GameCatalogDocument catalog)
     {
-        if (catalog.SchemaVersion != 1 || catalog.Revision < 1 || catalog.Games.Count > 5000)
+        if (catalog.SchemaVersion != 1 || catalog.Revision < 1 || catalog.Games is null || catalog.Games.Count > 5000)
         {
             throw new InvalidDataException("游戏目录的版本、修订号或条目数量无效。");
         }
@@ -99,19 +105,19 @@ public static partial class GameCatalogVerifier
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var game in catalog.Games)
         {
-            if (!IdPattern().IsMatch(game.Id) || !ids.Add(game.Id) || string.IsNullOrWhiteSpace(game.Name) || game.Name.Length > 100)
+            if (game is null || string.IsNullOrWhiteSpace(game.Id) || !IdPattern().IsMatch(game.Id) || !ids.Add(game.Id) || string.IsNullOrWhiteSpace(game.Name) || game.Name.Length > 100)
             {
                 throw new InvalidDataException("游戏目录包含无效或重复的游戏标识。");
             }
 
-            if (game.Executables.Count is < 1 or > 16 || game.SavePathTemplates.Count is < 1 or > 16)
+            if (game.Executables is null || game.SavePathTemplates is null || game.Executables.Count is < 1 or > 16 || game.SavePathTemplates.Count is < 1 or > 16)
             {
                 throw new InvalidDataException($"游戏 {game.Name} 的程序或存档规则数量无效。");
             }
 
             foreach (var executable in game.Executables)
             {
-                if (executable.Length > 128 || !executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
+                if (string.IsNullOrWhiteSpace(executable) || executable.Length > 128 || !executable.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ||
                     !string.Equals(Path.GetFileName(executable), executable, StringComparison.Ordinal))
                 {
                     throw new InvalidDataException($"游戏 {game.Name} 包含无效的程序文件名。");

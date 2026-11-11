@@ -59,12 +59,17 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
     }
 
     internal PathEchoRuntime(bool previewMode, bool previewSeed, Func<string, bool> directoryExists, string? diagnosticDirectory)
+        : this(previewMode, previewSeed, directoryExists, diagnosticDirectory, null)
+    {
+    }
+
+    internal PathEchoRuntime(bool previewMode, bool previewSeed, Func<string, bool> directoryExists, string? diagnosticDirectory, string? dataRoot)
     {
         _directoryExists = directoryExists ?? throw new ArgumentNullException(nameof(directoryExists));
         _lifetimeToken = _stopping.Token;
         _previewMode = previewMode;
         _previewSeed = previewSeed;
-        _dataRoot = Path.Combine(
+        _dataRoot = dataRoot ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "PathEcho");
         _configurationStore = new JsonConfigurationStore(Path.Combine(_dataRoot, "configuration.json"));
@@ -78,6 +83,8 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
     public AppConfiguration Configuration { get; private set; } = new();
 
     public bool IsPreviewMode => _previewMode;
+
+    public string? LastConfigurationWarning { get; private set; }
 
     public IReadOnlyList<HistoryScanReport> HistoryReports => _historyReports;
 
@@ -257,7 +264,8 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         RecordDiagnostic(operationId, null, profile.Id, "config.previous-root", "Observed", path: oldBackupRoot);
         var backupRootChanged = !string.Equals(oldBackupRoot, newBackupRoot, StringComparison.OrdinalIgnoreCase);
         var manager = new BackupDirectoryManager();
-        var moved = false;
+        BackupProfileMove? migration = null;
+        LastConfigurationWarning = null;
 
         if (!_previewMode && backupRootChanged)
         {
@@ -270,7 +278,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         {
             if (!_previewMode && backupRootChanged)
             {
-                moved = await manager.MoveProfileAsync(
+                migration = await manager.PrepareMoveProfileAsync(
                     profile.Id,
                     oldBackupRoot,
                     newBackupRoot,
@@ -292,15 +300,11 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         {
             RecordDiagnostic(operationId, null, profile.Id, "config.persisted", "Failed", updateException.GetType().Name);
             Exception? rollbackException = null;
-            if (moved)
+            if (migration is not null)
             {
                 try
                 {
-                    await manager.MoveProfileAsync(
-                        profile.Id,
-                        newBackupRoot,
-                        oldBackupRoot,
-                        CancellationToken.None).ConfigureAwait(false);
+                    migration.Rollback();
                 }
                 catch (Exception exception)
                 {
@@ -324,6 +328,12 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             throw;
         }
 
+        var residue = migration?.Commit();
+        if (residue is not null)
+        {
+            LastConfigurationWarning = $"配置已保存，新备份已验证；旧目录清理未完成，保留于：{residue}";
+            RecordDiagnostic(operationId, null, profile.Id, "backup.migration.cleanup", "Warning", "SOURCE_RETAINED", residue);
+        }
         await InvokeOnUiAsync(() =>
         {
             var index = GameProfiles.ToList().FindIndex(item => item.Definition.Id == profile.Id);
@@ -432,8 +442,10 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            await InvokeOnUiAsync(() => UpdateSyncRow(row, SyncTaskActivity.Failed, "同步失败"));
-            await RecordSyncRunSafelyAsync(task, "手动", null, exception, startedAt).ConfigureAwait(false);
+            var applied = (exception as SyncBaselinePersistenceException)?.AppliedResult;
+            await InvokeOnUiAsync(() => UpdateSyncRow(row, SyncTaskActivity.Failed, applied is null ? "同步失败" : "文件已同步，基线保存失败"));
+            RecordDiagnostic(Guid.NewGuid(), null, task.Id, "sync.run.completed", "Failed", exception.GetType().Name);
+            await RecordSyncRunSafelyAsync(task, "手动", applied, exception, startedAt).ConfigureAwait(false);
             AppLogger.Error($"Manual synchronization failed for task {taskId:N}.", exception);
             throw;
         }
@@ -481,7 +493,10 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         }
     }
 
-    public async Task<RestoreResult> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
+    public Task<RestoreResult> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default) =>
+        RestoreWithOccupancyAsync(request, new RestartManagerOccupancyService(), cancellationToken);
+
+    internal async Task<RestoreResult> RestoreWithOccupancyAsync(RestoreRequest request, IFileOccupancyService occupancy, CancellationToken cancellationToken = default)
     {
         EnsureNotPreview("预览模式不会执行真实存档回档。");
         var profile = FindProfileBySaveDirectory(request.TargetDirectory);
@@ -493,12 +508,12 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
 
         try
         {
-            var service = new SnapshotRestoreService(new RestartManagerOccupancyService());
+            var service = new SnapshotRestoreService(occupancy);
             return await service.RestoreAsync(request, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
-            if (profile is not null && profile.IsEnabled)
+            if (profile is not null && profile.IsEnabled && !_disposed && !_lifetimeToken.IsCancellationRequested)
             {
                 await StartGameMonitorSafelyAsync(profile).ConfigureAwait(false);
             }
@@ -559,7 +574,8 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             DefaultBackupDirectory = newBackupRoot,
             UpdateNetwork = UpdateRoutePlanner.Normalize(updateNetwork),
         };
-        var movedProfiles = new List<Guid>();
+        var migrations = new List<BackupProfileMove>();
+        LastConfigurationWarning = null;
         ValidateSharedBackupDirectories(updatedConfiguration);
         var profilesWithoutBackups = 0;
         var manager = new BackupDirectoryManager();
@@ -579,9 +595,10 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             {
                 foreach (var profile in Configuration.GameProfiles.Where(profile => string.IsNullOrWhiteSpace(profile.BackupDirectory)))
                 {
-                    if (await manager.MoveProfileAsync(profile.Id, oldBackupRoot, newBackupRoot, cancellationToken).ConfigureAwait(false))
+                    var migration = await manager.PrepareMoveProfileAsync(profile.Id, oldBackupRoot, newBackupRoot, cancellationToken).ConfigureAwait(false);
+                    if (migration is not null)
                     {
-                        movedProfiles.Add(profile.Id);
+                        migrations.Add(migration);
                     }
                     else
                     {
@@ -599,9 +616,9 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             Exception? rollbackException = null;
             try
             {
-                foreach (var profileId in movedProfiles.AsEnumerable().Reverse())
+                foreach (var migration in migrations.AsEnumerable().Reverse())
                 {
-                    await manager.MoveProfileAsync(profileId, newBackupRoot, oldBackupRoot, CancellationToken.None).ConfigureAwait(false);
+                    migration.Rollback();
                 }
             }
             catch (Exception rollbackFailure)
@@ -623,7 +640,10 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             throw;
         }
 
-        string? startupWarning = null;
+        Interlocked.Increment(ref _configRevision);
+        var residues = migrations.Select(migration => migration.Commit()).Where(path => path is not null).ToArray();
+        string? startupWarning = residues.Length == 0 ? null : "配置已保存，新备份已验证；旧目录清理未完成：" + string.Join("；", residues);
+        LastConfigurationWarning = startupWarning;
         if (!_previewMode)
         {
             AppLogger.Configure(enableDebugLogging);
@@ -638,7 +658,8 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             catch (Exception exception)
             {
                 AppLogger.Error("Startup registration update failed after saving settings.", exception);
-                startupWarning = $"配置已保存，但开机自启设置未生效：{exception.Message}";
+                startupWarning = string.Join("；", new[] { startupWarning, $"配置已保存，但开机自启设置未生效：{exception.Message}" }.Where(value => !string.IsNullOrEmpty(value)));
+                LastConfigurationWarning = startupWarning;
             }
 
             if (backupRootChanged)
@@ -649,7 +670,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
             }
         }
 
-        return new SettingsSaveResult(backupRootChanged, movedProfiles.Count, profilesWithoutBackups, startupWarning);
+        return new SettingsSaveResult(backupRootChanged, migrations.Count, profilesWithoutBackups, startupWarning);
     }
 
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default, bool forceDiscovery = false, Guid? parentOperationId = null, bool periodic = false)
@@ -811,6 +832,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
 
     private async Task StartSyncMonitorAsync(SyncTaskDefinition task, CancellationToken cancellationToken)
     {
+        if (_disposed || _lifetimeToken.IsCancellationRequested) return;
         if (_syncMonitors.ContainsKey(task.Id))
         {
             return;
@@ -826,7 +848,8 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         {
             AppLogger.Error($"Automatic synchronization failed for task {task.Id:N}.", exception);
             SetSyncStatus(task.Id, SyncTaskActivity.Failed, $"失败：{exception.Message}");
-            _ = RecordSyncRunSafelyAsync(task, "后台", null, exception);
+            RecordDiagnostic(Guid.NewGuid(), null, task.Id, "sync.run.completed", "Failed", exception.GetType().Name);
+            _ = RecordSyncRunSafelyAsync(task, "后台", (exception as SyncBaselinePersistenceException)?.AppliedResult, exception);
         };
         _syncMonitors.Add(task.Id, monitor);
         try
@@ -854,6 +877,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             AppLogger.Error($"Sync monitor startup failed for task {task.Id:N}.", exception);
+            RecordDiagnostic(Guid.NewGuid(), null, task.Id, "sync.monitor.start", "Failed", exception.GetType().Name, task.LeftPath);
             SetSyncStatus(task.Id, SyncTaskActivity.Failed, $"监听失败：{exception.Message}");
         }
     }
@@ -877,6 +901,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
 
     private async Task StartGameMonitorAsync(GameBackupProfile profile)
     {
+        if (_disposed || _lifetimeToken.IsCancellationRequested) return;
         if (_gameMonitors.ContainsKey(profile.Id))
         {
             return;
@@ -933,6 +958,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
         catch (Exception exception)
         {
             AppLogger.Error($"Game backup monitor startup failed for profile {profile.Id:N}.", exception);
+            RecordDiagnostic(Guid.NewGuid(), null, profile.Id, "backup.monitor.start", "Failed", exception.GetType().Name, profile.SaveDirectory);
             SetGameStatus(profile.Id, $"监听失败：{exception.Message}");
         }
     }
@@ -1046,7 +1072,7 @@ public sealed partial class PathEchoRuntime : IAsyncDisposable
                 message,
                 "继续重试",
                 retry.Stage == BackupRetryStage.WritingBackup ? "停止并保留临时副本" : "停止重试");
-            prompt.ShowDialog();
+            prompt.ShowDialog(cancellationToken);
             return prompt.Choice == PromptChoice.Primary;
         });
     }

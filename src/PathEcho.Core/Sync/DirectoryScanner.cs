@@ -19,7 +19,8 @@ public sealed class DirectoryScanner
         string root,
         CancellationToken cancellationToken = default,
         PathEcho.Core.Models.SyncFilterRules? filters = null,
-        bool forceHash = false)
+        bool forceHash = false,
+        bool rejectRedirectingLinks = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         root = NormalizeRoot(root);
@@ -36,7 +37,7 @@ public sealed class DirectoryScanner
         _cache.TryGetValue(root, out var cachedFiles);
         var enumerationOptions = new EnumerationOptions
         {
-            AttributesToSkip = FileAttributes.ReparsePoint,
+            AttributesToSkip = rejectRedirectingLinks ? 0 : FileAttributes.ReparsePoint,
             IgnoreInaccessible = false,
         };
         var directories = new Stack<string>();
@@ -47,6 +48,8 @@ public sealed class DirectoryScanner
             foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos("*", enumerationOptions))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (rejectRedirectingLinks && entry.LinkTarget is not null)
+                    throw new InvalidDataException($"同步范围包含重定向链接，未生成操作计划：{entry.FullName}");
                 var relative = Path.GetRelativePath(root, entry.FullName);
                 if (entry is DirectoryInfo)
                 {

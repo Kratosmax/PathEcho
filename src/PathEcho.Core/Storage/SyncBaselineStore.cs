@@ -26,8 +26,16 @@ public sealed class SyncBaselineStore
         }
 
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
-        return await JsonSerializer.DeserializeAsync<SyncBaseline>(stream, SerializerOptions, cancellationToken)
-            .ConfigureAwait(false) ?? SyncBaseline.Empty;
+        try
+        {
+            var baseline = await JsonSerializer.DeserializeAsync<SyncBaseline>(stream, SerializerOptions, cancellationToken).ConfigureAwait(false);
+            if (baseline?.Files is null) throw new JsonException("Missing baseline files.");
+            return baseline;
+        }
+        catch (JsonException exception)
+        {
+            throw new InvalidDataException($"同步基线损坏，未执行任何文件操作：{path}。已保留原文件；请先检查备份，再重建该任务的基线。", exception);
+        }
     }
 
     public async Task SaveAsync(Guid taskId, SyncBaseline baseline, CancellationToken cancellationToken = default)

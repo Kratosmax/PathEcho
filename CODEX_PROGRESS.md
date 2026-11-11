@@ -17,10 +17,10 @@ dotnet --version
 
 ## 当前快照
 
-- 最后本地核验：2026-11-10，UTC+8。v0.8.0构建0警告0错误，Smoke50/50与真实Desktop套件通过，正式包验收和线上核验见发布记录。
-- 当前工作：按用户授权完成快速诊断实现、测试和v0.8.0正式发布。产品提交8fba5ab，Actions Run42747294408 completed/success，Release439901694已公开且latest指向v0.8.0。结构化缺清单/清单错误/内容等待/身份与不完整状态、默认摘要日志及去重、操作关联与脱敏五文件本地ZIP已交付；50项Smoke、本地Desktop及正式包程序集Desktop通过，独立审查通过，四包与全部资产签名/哈希及原始0.7.0两通道升级、公开后真实HTTPS下载预检通过。详见 [0.8.0发布核验](docs/releases/v0.8.0-verification.md)。本次现场根因仍是用户确认云盘漏manifest，未误标N/D兼容性补丁。
-- 版本：0.8.0正式版，唯一来源Directory.Build.props；上一正式版v0.7.0。不得覆盖历史标签或资产。
-- 分支：main；v0.8.0固定在产品提交8fba5ab，之后只追加发布证据文档。诊断实现、测试与发布记录均按用户授权推送。
+- 最后本地核验：2026-11-11，UTC+8。基线main2a3d2dd/v0.8.0，当前本地系统安全候选构建0警告0错误、Smoke55/56（保留RestartManager原生红项）、真实Desktop及包内Desktop通过；线上规则目录404。
+- 当前工作：用户明确要求发布系统安全修复，目标修复版本0.8.1。已完成版本校准，本地构建0警告0错误、Desktop通过，Smoke保留55/56（本机原生RmStartSession29）；先推送CI，云端同一原生用例与全部门禁通过后才创建正式标签/签名草稿。并将通过受控Sign game catalog工作流恢复规则目录404，验签后记录。产品改动与风险见系统验证报告，发布核验见docs/releases/v0.8.1-verification.md，尚不宣称正式发布完成。
+- 版本：0.8.1待发布，唯一来源Directory.Build.props；上一正式版v0.8.0。不得覆盖历史标签和资产。
+- 分支：main，正式代码HEAD2a3d2dd/tagv0.8.0产品8fba5ab。系统验证/修复与CI草案全部未提交，没有本轮外部发布。
 - 远程：`origin` 指向公开仓库 `https://github.com/Kratosmax/PathEcho.git`，远端 `main` 与本地提交已核验一致。
 - 上一正式版本：v0.7.0，标签d529bc2；当前正式版v0.8.0，正式资产及原始旧客户端兼容已核验。
 - GitHub Actions Secret `PATHECHO_UPDATE_PRIVATE_KEY` 已配置；本地临时私钥已删除，仅保留可公开的公钥。

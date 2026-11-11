@@ -21,6 +21,12 @@ Directory.CreateDirectory(testRoot);
 var tests = new (string Name, Func<Task> Run)[]
 {
     ("配置可原子保存并读取", TestConfigurationStoreAsync),
+    ("备份迁移先持久化配置后清理且失败可恢复", () => MigrationSafetyTests.RunAsync(testRoot)),
+    ("网络正文停滞可超时切路且更新包校验真实结构", () => NetworkSafetyTests.RunAsync(testRoot)),
+    ("备份源与监听状态组合故障不会丢失有效历史", () => BackupSafetyTests.RunAsync(testRoot)),
+    ("回档提交回滚和收尾故障遵守事务边界", () => RestoreSafetyTests.RunAsync(testRoot)),
+    ("同步源离线不伪造空目录或传播删除", () => SyncRootSafetyTests.RunAsync(testRoot)),
+    ("对象库跨操作损坏不复用且保留有效旧版回退", () => ObjectIntegrityTests.RunAsync(testRoot)),
     ("默认诊断摘要可去重轮转且写入失败仍保留证据", () => DiagnosticJournalTests.RunAsync(testRoot)),
     ("诊断ZIP仅导出白名单且默认脱敏并支持取消", () => DiagnosticExportTests.RunAsync(testRoot)),
     ("历史诊断区分缺清单、损坏、身份与内容并可到齐恢复", () => HistoryScanTests.RunAsync(testRoot)),
@@ -72,22 +78,37 @@ var tests = new (string Name, Func<Task> Run)[]
     ("正式构建会用包内更新器验证两种通道", TestReleasePackageVerificationContractAsync),
 };
 
+var outcomes = new List<object>();
+var failedTests = 0;
 try
 {
     foreach (var test in tests)
     {
-        await test.Run();
-        Console.WriteLine($"PASS {test.Name}");
+        var clock = Stopwatch.StartNew();
+        try
+        {
+            await test.Run();
+            Console.WriteLine($"PASS {test.Name}");
+            outcomes.Add(new { test.Name, Passed = true, DurationMs = clock.ElapsedMilliseconds, Error = (string?)null });
+        }
+        catch (Exception exception)
+        {
+            failedTests++;
+            Console.Error.WriteLine($"FAIL {test.Name}: {exception.Message}");
+            Console.Error.WriteLine(exception);
+            outcomes.Add(new { test.Name, Passed = false, DurationMs = clock.ElapsedMilliseconds, Error = exception.ToString() });
+        }
     }
-
-    Console.WriteLine($"全部通过：{tests.Length} 项");
-    return 0;
-}
-catch (Exception exception)
-{
-    Console.Error.WriteLine($"FAIL {exception.Message}");
-    Console.Error.WriteLine(exception);
-    return 1;
+    var reportPath = Path.Combine(repositoryRoot, "temp", "smoke-results-" + Guid.NewGuid().ToString("N") + ".json");
+    await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(new
+    {
+        Total = tests.Length,
+        Passed = tests.Length - failedTests,
+        Failed = failedTests,
+        Results = outcomes
+    }, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"验证完成：通过 {tests.Length - failedTests}/{tests.Length}，失败 {failedTests}；报告：{reportPath}");
+    return failedTests == 0 ? 0 : 1;
 }
 finally
 {
@@ -1699,30 +1720,7 @@ async Task TestUpdatePackageDownloadAsync()
     False(File.Exists(redirected), "非法重定向留下了正式更新包。");
 }
 
-static void CreateUpdatePackage(string path, bool malicious)
-{
-    using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
-    foreach (var item in new Dictionary<string, string>
-    {
-        ["PathEcho.exe"] = "placeholder",
-        ["PathEcho.Updater.exe"] = "placeholder",
-        ["channel.txt"] = "Lite",
-        ["version.txt"] = "0.1.0",
-        [".pathecho-install-root"] = "PathEcho",
-    })
-    {
-        var entry = archive.CreateEntry(item.Key);
-        using var writer = new StreamWriter(entry.Open());
-        writer.Write(item.Value);
-    }
-
-    if (malicious)
-    {
-        var entry = archive.CreateEntry("../escape.txt");
-        using var writer = new StreamWriter(entry.Open());
-        writer.Write("escape");
-    }
-}
+static void CreateUpdatePackage(string path, bool malicious) => NetworkSafetyTests.CreateUpdatePackage(path, malicious);
 
 async Task<int> RunUpdaterValidationAsync(string package, string? failureLogDirectory = null)
     => await RunUpdaterProcessAsync(package, null, null, failureLogDirectory);
@@ -1750,7 +1748,7 @@ async Task<int> RunUpdaterProcessAsync(string package, string? expectedHash, str
         "--package", package,
         "--sha256", hash,
         "--channel", "Lite",
-        "--version", "0.1.0",
+        "--version", NetworkSafetyTests.PackageVersion,
         "--verify-only", "true",
     })
     {
@@ -1868,7 +1866,7 @@ Task TestGameHistoryAndEditingContractAsync()
     True(windowCode.Contains("PrepareSnapshotBrowseAsync(row)", StringComparison.Ordinal), "打开历史版本没有生成独立浏览副本。");
     False(windowCode.Contains("Path.Combine(row.SnapshotDirectory, \"files\")", StringComparison.Ordinal), "界面仍直接打开可串改历史的旧 files 目录。");
     True(editorCode.Contains("Id = _existingProfile.Id", StringComparison.Ordinal), "编辑游戏时没有保留原配置 ID。");
-    True(runtimeCode.Contains("manager.MoveProfileAsync", StringComparison.Ordinal), "编辑单独备份目录时没有迁移现有备份。");
+    True(runtimeCode.Contains("manager.PrepareMoveProfileAsync", StringComparison.Ordinal), "编辑单独备份目录时没有迁移现有备份。");
     var snapshotFilesXaml = File.ReadAllText(Path.Combine(repositoryRoot, "src", "PathEcho", "Dialogs", "SnapshotFilesWindow.xaml"));
     True(snapshotFilesXaml.Contains("Header=\"文件名\"", StringComparison.Ordinal), "版本文件窗口缺少文件名列。");
     True(snapshotFilesXaml.Contains("Header=\"修改时间\"", StringComparison.Ordinal), "版本文件窗口缺少修改时间列。");

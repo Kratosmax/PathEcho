@@ -41,53 +41,95 @@ public sealed class BackupDirectoryManager
         }
     }
 
+    // Instance scoped so fault injection cannot affect other managers or live operations.
+    internal Action<BackupProfileMoveFaultPoint, string>? MoveFaultHook { get; set; }
+
     public async Task<bool> MoveProfileAsync(
         Guid profileId,
         string oldBackupDirectory,
         string newBackupDirectory,
         CancellationToken cancellationToken = default)
     {
+        var move = await PrepareMoveProfileAsync(profileId, oldBackupDirectory, newBackupDirectory, cancellationToken)
+            .ConfigureAwait(false);
+        if (move is null)
+        {
+            return false;
+        }
+
+        var retainedSource = move.Commit();
+        if (retainedSource is not null)
+        {
+            throw new BackupProfileMoveCleanupException(move.DestinationDirectory, retainedSource);
+        }
+
+        return true;
+    }
+
+    /// <summary>Installs a verified copy while retaining the source until configuration has been persisted.</summary>
+    public async Task<BackupProfileMove?> PrepareMoveProfileAsync(
+        Guid profileId,
+        string oldBackupDirectory,
+        string newBackupDirectory,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var oldRoot = SafePath.NormalizeDirectory(oldBackupDirectory, "原备份目录不能为空。");
         var newRoot = SafePath.NormalizeDirectory(newBackupDirectory, "新备份目录不能为空。");
         if (string.Equals(oldRoot, newRoot, StringComparison.OrdinalIgnoreCase))
         {
-            return false;
+            return null;
         }
 
+        BackupProfileMove.EnsureNoRedirectingAncestors(oldRoot);
+        BackupProfileMove.EnsureNoRedirectingAncestors(newRoot);
         var source = Path.Combine(oldRoot, profileId.ToString("N"));
+        BackupProfileMove.EnsureNoRedirectingAncestors(source);
         if (!Directory.Exists(source))
         {
-            return false;
+            return null;
         }
 
         ValidateSeparateRoots(oldRoot, newRoot);
-        Directory.CreateDirectory(newRoot);
         var destination = Path.Combine(newRoot, profileId.ToString("N"));
-        if (Directory.Exists(destination))
+        if (Path.Exists(destination))
         {
-            throw new IOException($"新备份目录已存在该游戏的备份：{destination}");
+            throw new IOException($"新备份目录已存在该游戏的备份，未覆盖任何内容：{destination}");
         }
 
-        try
-        {
-            Directory.Move(source, destination);
-            return true;
-        }
-        catch (IOException) when (!Directory.Exists(destination))
-        {
-        }
-
+        Directory.CreateDirectory(newRoot);
         var stage = Path.Combine(newRoot, $".{profileId:N}-{Guid.NewGuid():N}.moving");
+        var installed = false;
+        void Fault(BackupProfileMoveFaultPoint point, string path) => MoveFaultHook?.Invoke(point, path);
         try
         {
-            await CopyAndVerifyProfileAsync(source, stage, cancellationToken).ConfigureAwait(false);
+            await CopyAndVerifyProfileAsync(source, stage, cancellationToken, Fault).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            Fault(BackupProfileMoveFaultPoint.BeforeInstall, destination);
+            cancellationToken.ThrowIfCancellationRequested();
+            // Directory.Move fails on a concurrent destination; never delete a target we did not install.
+            BackupProfileMove.EnsureNoRedirectingAncestors(source);
+            BackupProfileMove.EnsureNoRedirectingAncestors(stage);
+            BackupProfileMove.EnsureNoRedirectingAncestors(destination);
             Directory.Move(stage, destination);
-            DirectoryTree.DeleteIfPresent(source);
-            return true;
+            installed = true;
+            Fault(BackupProfileMoveFaultPoint.Installed, destination);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new BackupProfileMove(source, destination, Fault);
         }
-        catch
+        catch (Exception failure)
         {
-            DirectoryTree.DeleteIfPresent(stage);
+            var ownedPath = installed ? destination : stage;
+            try
+            {
+                BackupProfileMove.DeleteOwnedTree(ownedPath, BackupProfileMoveFaultPoint.RollbackEntry, Fault);
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new BackupProfileMoveRollbackException(source, ownedPath,
+                    new AggregateException(failure, cleanupFailure));
+            }
+
             throw;
         }
     }
@@ -175,7 +217,8 @@ public sealed class BackupDirectoryManager
     private static async Task CopyAndVerifyProfileAsync(
         string sourceProfileRoot,
         string destinationProfileRoot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<BackupProfileMoveFaultPoint, string>? fault = null)
     {
         var sourceSnapshotsRoot = Path.Combine(sourceProfileRoot, "snapshots");
         if (!Directory.Exists(sourceSnapshotsRoot))
@@ -201,6 +244,7 @@ public sealed class BackupDirectoryManager
 
                 var destination = SnapshotContent.GetObjectPath(destinationProfileRoot, entry.Sha256);
                 await AtomicFileOperations.CopyAsync(source, destination, cancellationToken).ConfigureAwait(false);
+                fault?.Invoke(BackupProfileMoveFaultPoint.CopiedObject, destination);
                 var destinationHash = await ContentHash.ComputeAsync(destination, cancellationToken).ConfigureAwait(false);
                 if (!string.Equals(destinationHash, entry.Sha256, StringComparison.Ordinal))
                 {

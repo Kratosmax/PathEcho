@@ -25,7 +25,10 @@ public sealed class BackupStagingStore : IBackupStagingStore
 
         try
         {
-            var sourceFiles = await _scanner.ScanAsync(sourceDirectory, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            var sourceCreatedAt = ReadSourceCreationTime(sourceDirectory);
+            var sourceFiles = await _scanner.ScanAsync(sourceDirectory, cancellationToken, forceHash: true).ConfigureAwait(false);
+            EnsureSameSource(sourceDirectory, sourceCreatedAt);
             Directory.CreateDirectory(filesDirectory);
             foreach (var relativePath in sourceFiles.Keys.OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
             {
@@ -36,8 +39,11 @@ public sealed class BackupStagingStore : IBackupStagingStore
                     cancellationToken).ConfigureAwait(false);
             }
 
-            var stagedFiles = await _scanner.ScanAsync(filesDirectory, cancellationToken).ConfigureAwait(false);
-            if (!HaveSameContents(sourceFiles, stagedFiles))
+            var stagedFiles = await _scanner.ScanAsync(filesDirectory, cancellationToken, forceHash: true).ConfigureAwait(false);
+            EnsureSameSource(sourceDirectory, sourceCreatedAt);
+            var currentSourceFiles = await _scanner.ScanAsync(sourceDirectory, cancellationToken, forceHash: true).ConfigureAwait(false);
+            EnsureSameSource(sourceDirectory, sourceCreatedAt);
+            if (!HaveSameContents(sourceFiles, stagedFiles) || !HaveSameContents(sourceFiles, currentSourceFiles))
             {
                 throw new IOException("临时存档副本校验失败，源文件可能仍在变化。");
             }
@@ -55,6 +61,8 @@ public sealed class BackupStagingStore : IBackupStagingStore
                 true);
             await JsonSerializer.SerializeAsync(markerStream, marker, SerializerOptions, cancellationToken).ConfigureAwait(false);
             await markerStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            EnsureSameSource(sourceDirectory, sourceCreatedAt);
             return filesDirectory;
         }
         catch
@@ -66,6 +74,25 @@ public sealed class BackupStagingStore : IBackupStagingStore
 
     public void DeleteIfPresent(string transactionDirectory) =>
         DirectoryTree.DeleteIfPresent(transactionDirectory);
+
+    private static DateTime ReadSourceCreationTime(string sourceDirectory)
+    {
+        // GetAttributes preserves missing/offline/access errors instead of interpreting them as an empty save.
+        if (!File.GetAttributes(sourceDirectory).HasFlag(FileAttributes.Directory))
+        {
+            throw new IOException($"存档路径不是目录：{sourceDirectory}");
+        }
+
+        return Directory.GetCreationTimeUtc(sourceDirectory);
+    }
+
+    private static void EnsureSameSource(string sourceDirectory, DateTime expectedCreationTime)
+    {
+        if (ReadSourceCreationTime(sourceDirectory) != expectedCreationTime)
+        {
+            throw new IOException("创建临时副本期间存档目录已被替换。");
+        }
+    }
 
     private static bool HaveSameContents(
         IReadOnlyDictionary<string, FileStamp> expected,

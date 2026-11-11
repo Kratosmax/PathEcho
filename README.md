@@ -1,6 +1,6 @@
 # PathEcho
 
-当前版本：`0.8.0`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
+当前版本：`0.8.1`。请从 [GitHub Releases](https://github.com/Kratosmax/PathEcho/releases/latest) 下载对应版本资产。
 
 <img src="src/PathEcho/Assets/PathEchoLogo.png" alt="PathEcho Logo" width="96" />
 
@@ -12,10 +12,10 @@ PathEcho 是面向 Windows 的本机目录同步与游戏存档版本备份工�
 
 | 包 | 适用场景 |
 |---|---|
-| `PathEcho-0.8.0-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
-| `PathEcho-0.8.0-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
-| `PathEcho-0.8.0-Full.zip` | 免安装，自带 .NET 8 运行时 |
-| `PathEcho-0.8.0-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
+| `PathEcho-0.8.1-Full-Setup.exe` | 推荐，自带 .NET 8 运行时并提供卸载程序 |
+| `PathEcho-0.8.1-Lite-Setup.exe` | 安装版，需要 [.NET 8 Desktop Runtime x64](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `PathEcho-0.8.1-Full.zip` | 免安装，自带 .NET 8 运行时 |
+| `PathEcho-0.8.1-Lite.zip` | 最小免安装包，需要 .NET 8 Desktop Runtime x64 |
 
 系统要求：Windows 10 19045 或 Windows 11 x64。普通同步与备份不需要管理员权限；结束占用存档的高权限进程可能需要对应权限。
 
@@ -91,9 +91,13 @@ PathEcho 启动后可后台检查更新，也可在设置页手动检查。客�
 
 ## 本版优化与核验
 
-本版已完成目录排除剪枝与有界缓存、通知按到期调度、同步状态模型拆分及目录状态后台刷新，并改善表格、工具栏、设置页固定保存区与下拉框样式。实测数据、验证范围和本地 Lite 预览说明见 [优化交付记录](docs/reviews/2026-11-09-optimization.md)。当前正式版本为 `0.8.0`，资产、签名和升级核验见 [发布核验记录](docs/releases/v0.8.0-verification.md)。
+本版已完成目录排除剪枝与有界缓存、通知按到期调度、同步状态模型拆分及目录状态后台刷新，并改善表格、工具栏、设置页固定保存区与下拉框样式。实测数据、验证范围和本地 Lite 预览说明见 [优化交付记录](docs/reviews/2026-11-09-optimization.md)。当前正式版本为 `0.8.1`，资产、签名和升级核验见 [发布核验记录](docs/releases/v0.8.1-verification.md)。
 
 窗口右上角关闭会隐藏到托盘继续监听；需要完全退出时使用托盘菜单的退出入口。
+
+## 系统验证工作区
+
+当前本地安全修复和验证结果见 [系统验证报告](docs/verification/2026-11-11-system-safety.md)。这是未发布工作区，不等同于上方正式0.8.1下载内容。Smoke现在会执行所有独立用例并写机器可读结果；任何失败仍返回非零，不能以其余用例通过代替发布门禁。新增PR/main验证工作流目前仅为本地草案。
 
 ## 自行编译
 

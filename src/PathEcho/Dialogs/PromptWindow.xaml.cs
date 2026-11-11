@@ -21,6 +21,9 @@ public partial class PromptWindow : Window
         string? tertiaryText = null,
         bool primaryIsDanger = false)
     {
+        // Background backup retries may be the first interactive window of a tray-only session.
+        if (!owner.IsVisible) owner.Show();
+        if (owner.WindowState == WindowState.Minimized) owner.WindowState = WindowState.Normal;
         Owner = owner;
         InitializeComponent();
         WindowBackdrop.Attach(this);
@@ -47,6 +50,21 @@ public partial class PromptWindow : Window
     }
 
     public PromptChoice Choice { get; private set; }
+
+    public bool? ShowDialog(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        using var registration = cancellationToken.Register(() =>
+        {
+            if (!Dispatcher.HasShutdownStarted)
+            {
+                _ = Dispatcher.BeginInvoke(() => { if (IsVisible) Close(); });
+            }
+        });
+        var result = base.ShowDialog();
+        cancellationToken.ThrowIfCancellationRequested();
+        return result;
+    }
 
     private void OnPrimary(object sender, RoutedEventArgs e) => CloseWith(PromptChoice.Primary);
     private void OnSecondary(object sender, RoutedEventArgs e) => CloseWith(PromptChoice.Secondary);

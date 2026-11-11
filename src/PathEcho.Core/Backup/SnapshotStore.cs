@@ -15,7 +15,6 @@ public sealed class SnapshotStore : IBackupSnapshotStore
     internal Action<string, string>? HistoryScanProbe { get; init; }
     private readonly DirectoryScanner _scanner = new();
     private readonly BackupProfileLocator _profileLocator = new();
-    private readonly HashSet<string> _verifiedObjects = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<SnapshotCreationResult> CreateAsync(
         Guid profileId,
@@ -32,6 +31,7 @@ public sealed class SnapshotStore : IBackupSnapshotStore
             throw new DirectoryNotFoundException($"存档目录不存在：{sourceRoot}");
         }
 
+        var sourceIdentity = CaptureSourceIdentity(sourceRoot);
         var profileRoot = Path.Combine(backupRoot, profileId.ToString("N"));
         ValidateSeparateRoots(sourceRoot, profileRoot);
         var objectsRoot = Path.Combine(profileRoot, "objects");
@@ -44,6 +44,7 @@ public sealed class SnapshotStore : IBackupSnapshotStore
             snapshotsRoot,
             changedPaths,
             cancellationToken).ConfigureAwait(false);
+        VerifySourceIdentity(sourceRoot, sourceIdentity);
         var createdAt = DateTimeOffset.UtcNow;
         var snapshotName = $"{createdAt:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}";
         var pendingRoot = Path.Combine(snapshotsRoot, $".{snapshotName}.pending");
@@ -72,6 +73,7 @@ public sealed class SnapshotStore : IBackupSnapshotStore
                 }
             }
 
+            VerifySourceIdentity(sourceRoot, sourceIdentity);
             var manifest = new SnapshotManifest
             {
                 SchemaVersion = 2,
@@ -674,14 +676,29 @@ public sealed class SnapshotStore : IBackupSnapshotStore
         return entries.Values.OrderBy(entry => entry.RelativePath, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
+    private static DateTime CaptureSourceIdentity(string root)
+    {
+        var info = new DirectoryInfo(root);
+        info.Refresh();
+        if (!info.Exists) throw new DirectoryNotFoundException($"存档目录不存在：{root}");
+        return info.CreationTimeUtc;
+    }
+
+    private static void VerifySourceIdentity(string root, DateTime expected)
+    {
+        if (CaptureSourceIdentity(root) != expected) throw new IOException($"备份期间存档目录已被替换，未提交快照：{root}");
+    }
+
     private async Task<IReadOnlyList<SnapshotFileEntry>> ScanAllEntriesAsync(
         string sourceRoot,
         CancellationToken cancellationToken)
     {
+        var identity = CaptureSourceIdentity(sourceRoot);
         var files = await _scanner.ScanAsync(
             sourceRoot,
             cancellationToken,
             forceHash: true).ConfigureAwait(false);
+        VerifySourceIdentity(sourceRoot, identity);
         return files
             .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
             .Select(pair => ToEntry(pair.Key, pair.Value))
@@ -727,13 +744,11 @@ public sealed class SnapshotStore : IBackupSnapshotStore
     {
         if (File.Exists(objectPath))
         {
-            if (_verifiedObjects.Contains(objectPath) ||
-                string.Equals(
+            if (string.Equals(
                     await ContentHash.ComputeAsync(objectPath, cancellationToken).ConfigureAwait(false),
                     expectedHash,
                     StringComparison.Ordinal))
             {
-                _verifiedObjects.Add(objectPath);
                 return false;
             }
 
@@ -750,7 +765,6 @@ public sealed class SnapshotStore : IBackupSnapshotStore
             throw new IOException($"备份对象校验失败：{Path.GetFileName(sourcePath)}");
         }
 
-        _verifiedObjects.Add(objectPath);
         return true;
     }
 
@@ -775,8 +789,7 @@ public sealed class SnapshotStore : IBackupSnapshotStore
                 {
                     var objectPath = SnapshotContent.GetObjectPath(profileRoot, entry.Sha256);
                     if (!File.Exists(objectPath) ||
-                        (!_verifiedObjects.Contains(objectPath) &&
-                         !string.Equals(
+                        (!string.Equals(
                              await ContentHash.ComputeAsync(objectPath, cancellationToken).ConfigureAwait(false),
                              entry.Sha256,
                              StringComparison.Ordinal)))
@@ -785,7 +798,6 @@ public sealed class SnapshotStore : IBackupSnapshotStore
                         break;
                     }
 
-                    _verifiedObjects.Add(objectPath);
                 }
 
                 if (!valid)

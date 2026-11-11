@@ -163,6 +163,21 @@ public sealed partial class PathEchoRuntime
             counters: new Dictionary<string, long> { ["rawVersions"] = History.Count, ["visibleVersions"] = visibleCount });
     }
 
+    public void RecordUpdateCheckFailure(Guid operationId, Exception exception)
+    {
+        _diagnosticJournal.Append(new DiagnosticEvent
+        {
+            OperationId = operationId,
+            ConfigRevision = Interlocked.Read(ref _configRevision),
+            AppVersion = ApplicationUpdateService.CurrentVersion,
+            Stage = "update.startup-check.completed",
+            Result = "Failed",
+            ReasonCode = "UPDATE_CHECK_FAILED",
+            ErrorType = exception.GetType().FullName,
+            HResult = exception.HResult,
+        });
+    }
+
     public Guid BeginDiagnosticOperation(string stage, Guid? profileId = null)
     {
         var id = Guid.NewGuid();

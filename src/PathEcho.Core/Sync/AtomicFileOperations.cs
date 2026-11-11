@@ -1,9 +1,12 @@
+using PathEcho.Core.IO;
 namespace PathEcho.Core.Sync;
 
 public static class AtomicFileOperations
 {
     public static async Task CopyAsync(string source, string destination, CancellationToken cancellationToken = default)
     {
+        PathRedirectGuard.EnsureNoRedirectingAncestors(source);
+        PathRedirectGuard.EnsureNoRedirectingAncestors(destination);
         var destinationDirectory = Path.GetDirectoryName(destination)
             ?? throw new InvalidOperationException("目标文件缺少父目录。");
         Directory.CreateDirectory(destinationDirectory);
@@ -19,6 +22,9 @@ public static class AtomicFileOperations
             }
 
             File.SetLastWriteTimeUtc(temporary, File.GetLastWriteTimeUtc(source));
+            cancellationToken.ThrowIfCancellationRequested();
+            PathRedirectGuard.EnsureNoRedirectingAncestors(destination);
+            PathRedirectGuard.EnsureNoRedirectingAncestors(temporary);
             File.Move(temporary, destination, true);
         }
         finally

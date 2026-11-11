@@ -22,7 +22,8 @@ public sealed class GameBackupMonitor : IAsyncDisposable
     private readonly HashSet<string> _changedPaths = new(StringComparer.OrdinalIgnoreCase);
     private FileSystemWatcher? _watcher;
     private bool _processWasRunning;
-    private int _requiresFullSnapshot;
+    // A new watcher cannot trust paths missed while it was stopped (including restore).
+    private int _requiresFullSnapshot = 1;
 
     public GameBackupMonitor(GameBackupProfile profile, GameBackupService service)
     {
@@ -45,7 +46,6 @@ public sealed class GameBackupMonitor : IAsyncDisposable
             throw new InvalidOperationException("游戏备份监听已经启动。");
         }
 
-        Directory.CreateDirectory(Path.GetFullPath(_profile.SaveDirectory));
         if (_profile.Triggers.HasFlag(BackupTrigger.ImportantFileChanged) ||
             _profile.Triggers.HasFlag(BackupTrigger.ChangedFiles))
         {
@@ -118,9 +118,14 @@ public sealed class GameBackupMonitor : IAsyncDisposable
                     forceFullSnapshot || trigger == BackupTrigger.ImportantFileChanged
                         ? null
                         : paths).ConfigureAwait(false);
-                if (result is null)
+                if (result == BackupAttemptOutcome.Throttled)
                 {
-                    await RunTrailingBackupAsync(trigger, paths, cancellationToken).ConfigureAwait(false);
+                    await RunTrailingBackupAsync(trigger, paths, forceFullSnapshot, cancellationToken).ConfigureAwait(false);
+                }
+                else if (result != BackupAttemptOutcome.Succeeded)
+                {
+                    // The failed batch is finished. Reconcile all paths on the next genuine event.
+                    Interlocked.Exchange(ref _requiresFullSnapshot, 1);
                 }
             }
         }
@@ -129,6 +134,7 @@ public sealed class GameBackupMonitor : IAsyncDisposable
     private async Task RunTrailingBackupAsync(
         BackupTrigger trigger,
         IReadOnlyCollection<string> throttledPaths,
+        bool forceFullSnapshot,
         CancellationToken cancellationToken)
     {
         // 备份被最低间隔跳过时，等待窗口结束后补一次，避免最后一次变化永久丢失。
@@ -151,7 +157,7 @@ public sealed class GameBackupMonitor : IAsyncDisposable
                 _changedPaths.Clear();
             }
 
-            var forceFullSnapshot = Interlocked.Exchange(ref _requiresFullSnapshot, 0) != 0;
+            forceFullSnapshot |= Interlocked.Exchange(ref _requiresFullSnapshot, 0) != 0;
             var trailingTrigger = ResolveTrigger(forceFullSnapshot, pendingPaths);
             if (trailingTrigger == BackupTrigger.None)
             {
@@ -164,8 +170,13 @@ public sealed class GameBackupMonitor : IAsyncDisposable
                 forceFullSnapshot || trailingTrigger == BackupTrigger.ImportantFileChanged
                     ? null
                     : pendingPaths.ToArray()).ConfigureAwait(false);
-            if (result is not null)
+            if (result != BackupAttemptOutcome.Throttled)
             {
+                if (result != BackupAttemptOutcome.Succeeded)
+                {
+                    Interlocked.Exchange(ref _requiresFullSnapshot, 1);
+                }
+
                 return;
             }
         }
@@ -203,7 +214,15 @@ public sealed class GameBackupMonitor : IAsyncDisposable
         }
     }
 
-    private async Task<SnapshotCreationResult?> TryCreateAsync(
+    private enum BackupAttemptOutcome
+    {
+        Succeeded,
+        Throttled,
+        Failed,
+        RetryStopped,
+    }
+
+    private async Task<BackupAttemptOutcome> TryCreateAsync(
         BackupTrigger trigger,
         CancellationToken cancellationToken,
         IReadOnlyCollection<string>? changedPaths = null)
@@ -216,16 +235,21 @@ public sealed class GameBackupMonitor : IAsyncDisposable
                 BackupCreated?.Invoke(this, result);
             }
 
-            return result;
+            return result is null ? BackupAttemptOutcome.Throttled : BackupAttemptOutcome.Succeeded;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
+        catch (BackupRetryStoppedException exception)
+        {
+            BackupFailed?.Invoke(this, exception);
+            return BackupAttemptOutcome.RetryStopped;
+        }
         catch (Exception exception)
         {
             BackupFailed?.Invoke(this, exception);
-            return null;
+            return BackupAttemptOutcome.Failed;
         }
     }
 
@@ -250,8 +274,16 @@ public sealed class GameBackupMonitor : IAsyncDisposable
         return watcher;
     }
 
-    private bool IsImportantFile(string relativePath) =>
-        _importantPatterns.Any(pattern => pattern.IsMatch(relativePath));
+    private bool IsImportantFile(string relativePath)
+    {
+        try { return _importantPatterns.Any(pattern => pattern.IsMatch(relativePath)); }
+        catch (RegexMatchTimeoutException exception)
+        {
+            // Conservatively include this change rather than silently losing the file worker.
+            BackupFailed?.Invoke(this, exception);
+            return true;
+        }
+    }
 
     private bool HasMatchingProcess()
     {

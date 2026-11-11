@@ -44,7 +44,14 @@ public sealed class SyncTaskRunner
         {
             var baseline = await _loadBaseline(task.Id, cancellationToken).ConfigureAwait(false);
             var result = await _run(task, baseline, forceFullScan, cancellationToken).ConfigureAwait(false);
-            await _saveBaseline(task.Id, result.Baseline, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _saveBaseline(task.Id, result.Baseline, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                throw new SyncBaselinePersistenceException(result, exception);
+            }
             return result;
         }
         finally
@@ -78,4 +85,12 @@ public sealed class SyncTaskRunner
             _gate.Release();
         }
     }
+}
+
+public sealed class SyncBaselinePersistenceException : IOException
+{
+    public SyncRunResult AppliedResult { get; }
+    public SyncBaselinePersistenceException(SyncRunResult result, Exception inner)
+        : base($"文件操作已执行（复制 {result.CopiedFiles}、删除 {result.DeletedFiles}、冲突 {result.Conflicts}），但同步基线保存失败。请检查状态目录后重新预演；不能将本次操作视为未发生。", inner)
+    { AppliedResult = result; }
 }

@@ -51,16 +51,18 @@ public sealed class SyncEngine
             task.Validate();
             var leftRoot = SyncTaskDefinition.NormalizeRoot(task.LeftPath);
             var rightRoot = SyncTaskDefinition.NormalizeRoot(task.RightPath);
-            Directory.CreateDirectory(leftRoot);
-            Directory.CreateDirectory(rightRoot);
+            EnsureRootsAvailable(task.Mode, leftRoot, rightRoot);
             if (forceFullScan)
             {
                 _scanner.Invalidate(leftRoot);
                 _scanner.Invalidate(rightRoot);
             }
 
-            var left = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters).ConfigureAwait(false);
-            var right = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters).ConfigureAwait(false);
+            var left = await _scanner.ScanAsync(leftRoot, cancellationToken, task.Filters, rejectRedirectingLinks: true).ConfigureAwait(false);
+            var right = await _scanner.ScanAsync(rightRoot, cancellationToken, task.Filters, rejectRedirectingLinks: true).ConfigureAwait(false);
+            // An offline or replaced root must not be interpreted as deliberate deletion.
+            RequireDirectory(leftRoot);
+            RequireDirectory(rightRoot);
             var plan = _planner.CreatePlan(task, left, right, baseline);
             var finalLeft = new Dictionary<string, FileStamp>(left, StringComparer.OrdinalIgnoreCase);
             var finalRight = new Dictionary<string, FileStamp>(right, StringComparer.OrdinalIgnoreCase);
@@ -135,6 +137,34 @@ public sealed class SyncEngine
         }
     }
 
+    internal static void EnsureRootsAvailable(SyncMode mode, string left, string right)
+    {
+        PathRedirectGuard.EnsureNoRedirectingAncestors(left);
+        PathRedirectGuard.EnsureNoRedirectingAncestors(right);
+        if (mode == SyncMode.LeftToRight)
+        {
+            RequireDirectory(left);
+            Directory.CreateDirectory(right);
+        }
+        else if (mode == SyncMode.RightToLeft)
+        {
+            RequireDirectory(right);
+            Directory.CreateDirectory(left);
+        }
+        else
+        {
+            RequireDirectory(left);
+            RequireDirectory(right);
+        }
+    }
+
+    private static void RequireDirectory(string path)
+    {
+        // GetAttributes retains permission and I/O failures; Directory.Exists would silently return false.
+        var attributes = File.GetAttributes(path);
+        if ((attributes & FileAttributes.Directory) == 0) throw new IOException($"同步根不是目录：{path}");
+    }
+
     public async Task<SyncPreviewResult> PreviewAsync(
         SyncTaskDefinition task,
         SyncBaseline baseline,
@@ -206,6 +236,8 @@ public sealed class SyncEngine
 
     private static string SafeCombine(string root, string relative)
     {
-        return SafePath.CombineUnderRoot(root, relative, "文件路径超出同步目录。");
+        var path = SafePath.CombineUnderRoot(root, relative, "文件路径超出同步目录。");
+        PathRedirectGuard.EnsureNoRedirectingAncestors(path);
+        return path;
     }
 }

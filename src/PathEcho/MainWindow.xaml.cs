@@ -32,6 +32,10 @@ public partial class MainWindow : Window
     private bool _historyRefreshQueued;
     private string _selectedView = "Sync";
     private string _settingsSnapshot = string.Empty;
+    private readonly CancellationTokenSource _startupUpdateCancellation = new();
+    private int _startupUpdateRunning;
+    private bool _startupUpdatesStopped;
+    private UpdateWindow? _activeUpdateWindow;
 
     public ObservableCollection<UpdateRouteRow> UpdateRoutes { get; } = new();
 
@@ -44,6 +48,13 @@ public partial class MainWindow : Window
         BackupNotificationEditor.PreviewRequested += (_, settings) =>
             ((App)System.Windows.Application.Current).PreviewBackupNotification(settings);
         WindowBackdrop.Attach(this);
+        Closed += (_, _) =>
+        {
+            _startupUpdatesStopped = true;
+            _activeUpdateWindow?.Close();
+            _startupUpdateCancellation.Cancel();
+            _startupUpdateCancellation.Dispose();
+        };
         var currentVersion = ApplicationUpdateService.CurrentVersion;
         SidebarVersionText.Text = $"v{currentVersion}";
         SettingsVersionText.Text = $"当前版本 {currentVersion}";
@@ -486,7 +497,7 @@ public partial class MainWindow : Window
             try
             {
                 var result = await _runtime.RestoreAsync(request);
-                StatusText.Text = $"回档完成，恢复 {result.RestoredFiles} 个文件";
+                StatusText.Text = FormatRestoreResult(result);
             }
             catch (FilesOccupiedException exception)
             {
@@ -511,10 +522,30 @@ public partial class MainWindow : Window
                     ? OccupiedFileAction.EndProcesses
                     : OccupiedFileAction.ForceAttempt;
                 var result = await _runtime.RestoreAsync(request with { OccupiedFileAction = action });
-                StatusText.Text = $"回档完成，恢复 {result.RestoredFiles} 个文件";
+                StatusText.Text = FormatRestoreResult(result);
+            }
+            catch (System.ComponentModel.Win32Exception exception)
+            {
+                _runtime.RecordDiagnostic(Guid.NewGuid(), null, row.Profile.Id, "restore.occupancy-check", "Failed", "NATIVE_INSPECTION_UNAVAILABLE");
+                var prompt = new PromptWindow(this, "无法检查存档占用",
+                    $"Windows 文件占用检查返回错误 {exception.NativeErrorCode}。这不表示文件未被占用，尚未修改存档。\n\n请先退出游戏。可以取消后重试，或明确选择不结束任何进程、直接按事务方式尝试恢复；遇到实际文件占用仍会失败并保留恢复数据。",
+                    "取消", "已退出游戏，尝试恢复");
+                prompt.ShowDialog();
+                if (prompt.Choice != PromptChoice.Secondary)
+                {
+                    StatusText.Text = "已取消回档，存档未修改";
+                    return;
+                }
+                var result = await _runtime.RestoreAsync(request with { OccupiedFileAction = OccupiedFileAction.ForceAttempt });
+                StatusText.Text = FormatRestoreResult(result);
             }
         });
     }
+
+    internal static string FormatRestoreResult(RestoreResult result) =>
+        string.IsNullOrWhiteSpace(result.PreservedRollbackDirectory)
+            ? $"回档完成，恢复 {result.RestoredFiles} 个文件"
+            : $"已恢复 {result.RestoredFiles} 个文件；清理未完成，原件/事务残留保留于：{result.PreservedRollbackDirectory}";
 
     private async void OnBrowseDefaultBackup(object sender, RoutedEventArgs e)
     {
@@ -674,7 +705,7 @@ public partial class MainWindow : Window
 
         try
         {
-            new UpdateWindow(this, BuildUpdateNetworkOptions()).ShowDialog();
+            ShowUpdateDialog(null, BuildUpdateNetworkOptions());
         }
         catch (Exception exception)
         {
@@ -682,28 +713,107 @@ public partial class MainWindow : Window
         }
     }
 
-    public async Task CheckForUpdatesInBackgroundAsync()
+    private void ShowUpdateDialog(UpdateCheckResult? result, UpdateNetworkOptions options)
     {
-        if (_runtime.IsPreviewMode || !_runtime.Configuration.CheckForUpdates)
+        if (_startupUpdatesStopped) return;
+        if (_activeUpdateWindow is { IsVisible: true })
         {
+            _activeUpdateWindow.Activate();
             return;
         }
+        if (!IsVisible) Show();
+        var dialog = new UpdateWindow(this, options, startImmediately: result is null, initialResult: result);
+        _activeUpdateWindow = dialog;
+        try { dialog.ShowDialog(); }
+        finally { _activeUpdateWindow = null; }
+    }
 
+    public async Task CheckForUpdatesInBackgroundAsync()
+    {
+        if (_runtime.IsPreviewMode) return;
+        await RunStartupUpdateCheckAsync(
+            async token =>
+            {
+                using var service = new ApplicationUpdateService(_runtime.Configuration.UpdateNetwork);
+                return await service.CheckAsync(token);
+            },
+            TimeSpan.FromSeconds(3),
+            (result, options) => ShowUpdateDialog(result, options));
+    }
+
+    internal async Task RunStartupUpdateCheckAsync(
+        Func<CancellationToken, Task<UpdateCheckResult>> check,
+        TimeSpan delay,
+        Action<UpdateCheckResult, UpdateNetworkOptions> present,
+        TimeSpan? timeout = null)
+    {
+        if (_startupUpdatesStopped || Interlocked.CompareExchange(ref _startupUpdateRunning, 1, 0) != 0) return;
+        var lifetime = _startupUpdateCancellation.Token;
+        var operation = _runtime.BeginDiagnosticOperation("update.startup-check.start");
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+        deadline.CancelAfter(timeout ?? TimeSpan.FromSeconds(45));
         try
         {
-            await Task.Delay(TimeSpan.FromSeconds(3));
-            using var service = new ApplicationUpdateService(_runtime.Configuration.UpdateNetwork);
-            var result = await service.CheckAsync();
+            if (!_runtime.Configuration.CheckForUpdates)
+            {
+                StartupUpdateStatusText.Text = "启动自动检查已关闭";
+                _runtime.RecordDiagnostic(operation, null, null, "update.startup-check.completed", "Skipped", "UPDATE_DISABLED");
+                return;
+            }
+            StartupUpdateStatusText.Text = "等待启动后台检查…";
+            await Task.Delay(delay, deadline.Token);
+            if (_startupUpdatesStopped || !_runtime.Configuration.CheckForUpdates)
+            {
+                _runtime.RecordDiagnostic(operation, null, null, "update.startup-check.completed", "Skipped", "UPDATE_DISABLED_OR_EXITING");
+                return;
+            }
+            StartupUpdateStatusText.Text = "正在自动检查更新…";
+            var result = await check(deadline.Token);
+            deadline.Token.ThrowIfCancellationRequested();
+            if (_startupUpdatesStopped || Dispatcher.HasShutdownStarted ||
+                System.Windows.Application.Current is App { IsExiting: true }) return;
+            if (!_runtime.Configuration.CheckForUpdates)
+            {
+                StartupUpdateStatusText.Text = "启动自动检查已关闭";
+                _runtime.RecordDiagnostic(operation, null, null, "update.startup-check.completed", "Skipped", "UPDATE_DISABLED");
+                return;
+            }
+            var time = DateTime.Now.ToString("HH:mm:ss");
+            StartupUpdateStatusText.Text = result.Availability switch
+            {
+                UpdateAvailability.Available => $"{time} 自动检查：发现版本 {result.Manifest!.Version}",
+                UpdateAvailability.Latest => $"{time} 自动检查完成：当前 {result.CurrentVersion} 已是最新版本",
+                _ => $"{time} 自动检查：当前运行目录需要手动下载更新",
+            };
+            _runtime.RecordDiagnostic(operation, null, null, "update.startup-check.completed", result.Availability.ToString(),
+                result.Availability == UpdateAvailability.ManualOnly ? "UPDATE_MANUAL_ONLY" : null);
             if (result.Availability == UpdateAvailability.Available)
             {
-                new UpdateWindow(this, _runtime.Configuration.UpdateNetwork).ShowDialog();
+                // An owner that has never been shown is invalid in WPF. Reveal only when a verified update exists.
+                if (!IsVisible) Show();
+                if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+                Activate();
+                present(result, _runtime.Configuration.UpdateNetwork);
             }
+        }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested || _startupUpdatesStopped)
+        {
+            _runtime.RecordDiagnostic(operation, null, null, "update.startup-check.completed", "Canceled", "APPLICATION_EXITING");
+        }
+        catch (OperationCanceledException)
+        {
+            StartupUpdateStatusText.Text = "自动检查超时，可在设置中重试";
+            StatusText.Text = StartupUpdateStatusText.Text;
+            _runtime.RecordDiagnostic(operation, null, null, "update.startup-check.completed", "Failed", "UPDATE_CHECK_TIMEOUT");
         }
         catch (Exception exception)
         {
+            StartupUpdateStatusText.Text = "自动检查失败，可在设置中重试";
+            StatusText.Text = StartupUpdateStatusText.Text;
+            _runtime.RecordUpdateCheckFailure(operation, exception);
             AppLogger.Error("Background update check failed.", exception);
-            StatusText.Text = "后台更新检查失败，可在设置中重试";
         }
+        finally { Volatile.Write(ref _startupUpdateRunning, 0); }
     }
 
     private UpdateNetworkOptions BuildUpdateNetworkOptions()
@@ -1044,6 +1154,7 @@ public partial class MainWindow : Window
             {
                 StatusText.Text = $"{dialog.Result.Name} 已更新";
             }
+            if (_runtime.LastConfigurationWarning is { } warning) StatusText.Text = warning;
         }
     }
 
@@ -1172,15 +1283,18 @@ public partial class MainWindow : Window
 
     private async Task<bool> RunUiActionAsync(string status, Func<Task> action)
     {
+        var operationId = _runtime.BeginDiagnosticOperation("ui.action.start");
         StatusText.Text = status;
         IsEnabled = false;
         try
         {
             await action();
+            _runtime.RecordDiagnostic(operationId, null, null, "ui.action.completed", "Completed");
             return true;
         }
         catch (Exception exception)
         {
+            _runtime.RecordDiagnostic(operationId, null, null, "ui.action.completed", "Failed", exception.GetType().Name);
             StatusText.Text = "操作失败";
             AppLogger.Error(status, exception);
             ShowError(exception.Message);

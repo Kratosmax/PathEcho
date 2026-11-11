@@ -122,7 +122,16 @@ public sealed class GameBackupService
             var stagedSource = await RetryAsync(
                 BackupRetryStage.ReadingSource,
                 transactionDirectory,
-                token => _stagingStore.CreateAsync(_profile.SaveDirectory, transactionDirectory, token),
+                token =>
+                {
+                    token.ThrowIfCancellationRequested();
+                    if (!File.GetAttributes(_profile.SaveDirectory).HasFlag(FileAttributes.Directory))
+                    {
+                        throw new IOException($"存档路径不是目录：{_profile.SaveDirectory}");
+                    }
+
+                    return _stagingStore.CreateAsync(_profile.SaveDirectory, transactionDirectory, token);
+                },
                 cancellationToken).ConfigureAwait(false);
             stagingCompleted = true;
 

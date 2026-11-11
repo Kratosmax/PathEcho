@@ -27,15 +27,19 @@ jobs:
           try {
             [IO.File]::WriteAllText($key, $env:PATHECHO_UPDATE_PRIVATE_KEY, [Text.UTF8Encoding]::new($false))
             dotnet run --project build/PathEcho.ReleaseTool/PathEcho.ReleaseTool.csproj -c Release -- catalog $key config/game-catalog.source.json config/game-catalog.json
+            if ($LASTEXITCODE -ne 0) { throw "Catalog signing or verification failed." }
           } finally {
             Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue
           }
       - name: Commit signed catalog
         shell: powershell
         run: |
-          if (git diff --quiet -- config/game-catalog.json) { exit 0 }
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add config/game-catalog.json
+          if ($LASTEXITCODE -ne 0) { throw "Unable to stage signed catalog." }
+          git diff --cached --quiet -- config/game-catalog.json
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if ($LASTEXITCODE -ne 1) { throw "Unable to inspect signed catalog diff." }
           git commit -m "chore: update signed game catalog"
           git push

@@ -53,6 +53,7 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
         }
 
         _task.Validate();
+        SyncEngine.EnsureRootsAvailable(_task.Mode, SyncTaskDefinition.NormalizeRoot(_task.LeftPath), SyncTaskDefinition.NormalizeRoot(_task.RightPath));
         foreach (var root in GetWatchedRoots())
         {
             var watcher = CreateWatcher(root);
@@ -134,7 +135,6 @@ public sealed class SyncTaskMonitor : IAsyncDisposable
 
     private FileSystemWatcher CreateWatcher(string root)
     {
-        Directory.CreateDirectory(root);
         var watcher = new FileSystemWatcher(root)
         {
             IncludeSubdirectories = true,

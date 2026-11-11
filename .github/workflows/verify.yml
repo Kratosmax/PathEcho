@@ -1,0 +1,50 @@
+name: Verify functional safety
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build all production and test projects
+        id: build
+        shell: pwsh
+        run: dotnet build PathEcho.sln -c Release -m:1 -v:minimal
+      - name: Verify functional and fault matrices
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PathEcho.SmokeTests/PathEcho.SmokeTests.csproj -c Release --no-build 2>&1 | Tee-Object -FilePath temp/ci-smoke.log
+          exit $LASTEXITCODE
+      - name: Verify isolated actual desktop behavior
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          dotnet run --project tests/PathEcho.DesktopTests/PathEcho.DesktopTests.csproj -c Release --no-build -- temp/ci-desktop-results.json 2>&1 | Tee-Object -FilePath temp/ci-desktop.log
+          exit $LASTEXITCODE
+      - name: Verify formatting
+        if: ${{ always() && steps.build.outcome == 'success' }}
+        shell: pwsh
+        run: dotnet format PathEcho.sln --no-restore --verify-no-changes
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: functional-safety-evidence
+          if-no-files-found: ignore
+          path: |
+            temp/smoke-results-*.json
+            temp/ci-*.log
+            temp/ci-desktop-results.json
+            temp/desktop-tests/*.png

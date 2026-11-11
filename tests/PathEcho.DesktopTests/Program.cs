@@ -34,6 +34,10 @@ internal static class Program
                 LoadResources(app);
                 await LayoutAsync();
                 await RuntimeAsync();
+                await StartupUpdateTestsAsync();
+                await BackgroundPromptTestsAsync();
+                await RuntimeRestoreBaselineTestsAsync();
+                await RuntimeMigrationTestsAsync();
                 await ImportedProfileHistoryAsync();
                 await MissingManifestDiagnosticsAsync();
                 await NotificationAsync();
@@ -273,6 +277,207 @@ internal static class Program
             nestedHyphenatedBackup = true,
             historyVersions = runtime.History.Count,
             noRealConfiguration = true
+        });
+    }
+
+    private static async Task RuntimeMigrationTestsAsync()
+    {
+        foreach (var failPersistence in new[] { true, false })
+        {
+            var root = Path.GetFullPath(Path.Combine("temp", "desktop-tests", "runtime-migration-" + Guid.NewGuid().ToString("N")));
+            var data = Path.Combine(root, "data"); var save = Path.Combine(root, "save"); var oldBackup = Path.Combine(root, "old"); var newBackup = Path.Combine(root, "new");
+            Directory.CreateDirectory(data); Directory.CreateDirectory(save); await File.WriteAllTextAsync(Path.Combine(save, "slot.sav"), "progress");
+            var profile = new GameBackupProfile { Name = "隔离迁移", SaveDirectory = save, BackupDirectory = oldBackup, IsEnabled = false, Triggers = BackupTrigger.ChangedFiles };
+            var snapshot = await new PathEcho.Core.Backup.SnapshotStore().CreateAsync(profile.Id, save, oldBackup, "fixture");
+            if (failPersistence) Directory.CreateDirectory(Path.Combine(data, "configuration.json"));
+            await using var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null,
+                new object[] { false, false, (Func<string, bool>)Directory.Exists, Path.Combine(root, "diagnostics"), data }, null)!;
+            var config = new AppConfiguration { DefaultBackupDirectory = Path.Combine(root, "default"), GameProfiles = [profile] };
+            typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime, config);
+            runtime.GameProfiles.Add(new GameProfileRow(profile)); var changed = profile with { BackupDirectory = newBackup }; var failed = false;
+            try { await runtime.UpdateGameProfileAsync(changed); } catch (Exception exception) when (exception is IOException or UnauthorizedAccessException) { failed = true; }
+            var oldRoot = Path.Combine(oldBackup, profile.Id.ToString("N")); var newRoot = Path.Combine(newBackup, profile.Id.ToString("N"));
+            if (failPersistence)
+            {
+                Assert(failed && Directory.Exists(oldRoot) && !Directory.Exists(newRoot) && runtime.Configuration.GameProfiles[0].BackupDirectory == oldBackup,
+                    "Failed configuration persistence left a split migration or removed the original.");
+                var manifest = await PathEcho.Core.Backup.SnapshotContent.ReadManifestAsync(snapshot.SnapshotDirectory);
+                await PathEcho.Core.Backup.SnapshotContent.ResolveVerifiedFileAsync(snapshot.SnapshotDirectory, manifest.Files.Single());
+            }
+            else
+            {
+                Assert(!failed && !Directory.Exists(oldRoot) && Directory.Exists(newRoot), "Successful runtime migration did not complete its two phases.");
+                var persisted = await new PathEcho.Core.Storage.JsonConfigurationStore(Path.Combine(data, "configuration.json")).LoadAsync();
+                Assert(persisted.GameProfiles[0].BackupDirectory == newBackup && runtime.History.Count == 1, "Migration persisted the old path or lost verified history.");
+            }
+        }
+        Results.Add(new { probe = "runtime_migration_configuration_transaction", failedSaveKeepsOriginal = true, failedSaveRemovesOwnedCopy = true, savedBeforeSourceCleanup = true });
+    }
+
+    private static async Task RuntimeRestoreBaselineTestsAsync()
+    {
+        var root = Path.GetFullPath(Path.Combine("temp", "desktop-tests", "restore-baseline-" + Guid.NewGuid().ToString("N")));
+        var source = Path.Combine(root, "save"); var backup = Path.Combine(root, "backup");
+        Directory.CreateDirectory(source);
+        await File.WriteAllTextAsync(Path.Combine(source, "a.sav"), "a-old"); await File.WriteAllTextAsync(Path.Combine(source, "b.sav"), "b-old");
+        var profile = new GameBackupProfile
+        {
+            Name = "隔离回档组合",
+            SaveDirectory = source,
+            BackupDirectory = backup,
+            Triggers = BackupTrigger.ChangedFiles,
+            MinimumBackupInterval = TimeSpan.Zero
+        };
+        var store = new PathEcho.Core.Backup.SnapshotStore();
+        var old = await store.CreateAsync(profile.Id, source, backup, "old");
+        await File.WriteAllTextAsync(Path.Combine(source, "a.sav"), "a-new"); await File.WriteAllTextAsync(Path.Combine(source, "b.sav"), "b-new");
+        await store.CreateAsync(profile.Id, source, backup, "new");
+        await using var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null,
+            new object[] { false, false, (Func<string, bool>)Directory.Exists, Path.Combine(root, "diagnostics") }, null)!;
+        typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime, new AppConfiguration { DefaultBackupDirectory = Path.Combine(root, "default"), GameProfiles = [profile] });
+        runtime.GameProfiles.Add(new GameProfileRow(profile));
+        await (Task)typeof(PathEchoRuntime).GetMethod("StartGameMonitorAsync", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(runtime, [profile])!;
+        var request = new PathEcho.Core.Restore.RestoreRequest { SnapshotDirectory = old.SnapshotDirectory, TargetDirectory = source };
+        await (Task<PathEcho.Core.Restore.RestoreResult>)typeof(PathEchoRuntime).GetMethod("RestoreWithOccupancyAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(runtime, [request, new NoOccupancy(), CancellationToken.None])!;
+        var before = (await store.ListAsync(profile.Id, backup)).Count;
+        await File.WriteAllTextAsync(Path.Combine(source, "a.sav"), "a-after-restore");
+        var deadline = DateTime.UtcNow.AddSeconds(8); PathEcho.Core.Backup.SnapshotVersion? current = null;
+        while (DateTime.UtcNow < deadline)
+        {
+            var versions = await store.ListAsync(profile.Id, backup);
+            if (versions.Count > before) { current = versions[0]; break; }
+            await Task.Delay(100);
+        }
+        Assert(current is not null, "Runtime monitor was not re-established after restore.");
+        var b = current!.Manifest.Files.Single(entry => entry.RelativePath == "b.sav");
+        var file = await PathEcho.Core.Backup.SnapshotContent.ResolveVerifiedFileAsync(current.SnapshotDirectory, b);
+        Assert(await File.ReadAllTextAsync(file) == "b-old", "First monitored incremental backup after Runtime restore mixed in pre-restore content.");
+        var format = typeof(PathEcho.MainWindow).GetMethod("FormatRestoreResult", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var warning = (string)format.Invoke(null, [new PathEcho.Core.Restore.RestoreResult(2, 0, "retained-transaction")])!;
+        Assert(warning.Contains("清理未完成", StringComparison.Ordinal) && warning.Contains("retained-transaction", StringComparison.Ordinal), "Restore cleanup warning was reported as unconditional success.");
+        Results.Add(new { probe = "runtime_restore_then_automatic_backup", watcherRebuilt = true, fullBaselineReconciled = true, restoreCleanupWarningVisible = true });
+    }
+
+    private sealed class NoOccupancy : PathEcho.Core.Restore.IFileOccupancyService
+    {
+        public Task<IReadOnlyList<PathEcho.Core.Restore.OccupiedFile>> FindAsync(IReadOnlyList<string> paths, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<PathEcho.Core.Restore.OccupiedFile>>([]);
+        public Task TerminateAsync(IReadOnlyList<PathEcho.Core.Restore.LockingProcess> processes, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private static async Task BackgroundPromptTestsAsync()
+    {
+        var owner = new Window();
+        Assert(!owner.IsLoaded, "Prompt owner fixture was already displayed.");
+        var prompt = new PathEcho.Dialogs.PromptWindow(owner, "备份仍未成功", "测试后台失败通知", "继续重试", "停止重试");
+        Assert(owner.IsVisible, "A tray-only failure prompt still has a never-shown owner.");
+        _ = prompt.Dispatcher.BeginInvoke(() => ((Button)prompt.FindName("SecondaryButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)), DispatcherPriority.ApplicationIdle);
+        Assert(prompt.ShowDialog() == true && prompt.Choice == PathEcho.Dialogs.PromptChoice.Secondary,
+            "Stopping a background retry did not retain its explicit choice.");
+        using var cancellation = new CancellationTokenSource();
+        var cancelable = new PathEcho.Dialogs.PromptWindow(owner, "退出中的备份询问", "测试退出取消", "继续", "停止");
+        _ = cancelable.Dispatcher.BeginInvoke(() => cancellation.Cancel(), DispatcherPriority.ApplicationIdle);
+        var canceled = false;
+        try { cancelable.ShowDialog(cancellation.Token); }
+        catch (OperationCanceledException) { canceled = true; }
+        Assert(canceled && !cancelable.IsVisible, "Application exit left an uncompleted modal backup prompt.");
+        owner.Close(); await Idle();
+        Results.Add(new { probe = "background_prompt_lifecycle", neverShownOwnerHandled = true, stopChoicePreserved = true, exitCancelsModal = true });
+    }
+
+    private static async Task StartupUpdateTestsAsync()
+    {
+        var root = Path.GetFullPath(Path.Combine("temp", "desktop-tests", "startup-update-" + Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(root);
+        var config = new AppConfiguration { CheckForUpdates = true, EnableDebugLogging = false };
+        var runtime = (PathEchoRuntime)Activator.CreateInstance(typeof(PathEchoRuntime), BindingFlags.Instance | BindingFlags.NonPublic, null,
+            new object[] { true, false, (Func<string, bool>)Directory.Exists, Path.Combine(root, "diagnostics") }, null)!;
+        await using var runtimeCleanup = runtime;
+        typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime, config);
+        var hiddenOwner = new PathEcho.MainWindow(runtime);
+        Assert(!hiddenOwner.IsVisible && !hiddenOwner.IsLoaded, "Fixture owner was already shown.");
+        var manifest = new PathEcho.Core.Update.UpdateManifest
+        {
+            Version = "9.0.0",
+            Channel = "Lite",
+            PackageSize = 10,
+            Sha256 = new string('A', 64),
+            ReleaseNotes = "已验证的测试更新公告",
+            DownloadUrl = "https://github.com/Kratosmax/PathEcho/releases/download/v9.0.0/PathEcho-9.0.0-Lite.zip"
+        };
+        var result = new UpdateCheckResult(UpdateAvailability.Available, "0.8.0", manifest);
+        var method = typeof(PathEcho.MainWindow).GetMethod("RunStartupUpdateCheckAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        Task Run(PathEcho.MainWindow owner, Func<CancellationToken, Task<UpdateCheckResult>> check, Action<UpdateCheckResult, PathEcho.Core.Update.UpdateNetworkOptions> present, TimeSpan? timeout = null) =>
+            (Task)method.Invoke(owner, new object[] { check, TimeSpan.Zero, present, timeout ?? TimeSpan.FromSeconds(45) })!;
+        var calls = 0; PathEcho.Dialogs.UpdateWindow? update = null;
+        await Run(hiddenOwner, _ => { calls++; return Task.FromResult(result); }, (available, options) =>
+        {
+            Assert(hiddenOwner.IsVisible, "Never-shown owner was not revealed before assigning dialog Owner.");
+            update = new PathEcho.Dialogs.UpdateWindow(hiddenOwner, options, startImmediately: false, initialResult: available);
+            update.Show();
+        });
+        await Idle();
+        Assert(calls == 1 && update is not null && update.IsVisible, "Background update did not produce a visible dialog exactly once.");
+        Assert(((TextBlock)update!.FindName("NotesText")).Text == manifest.ReleaseNotes &&
+            ((Button)update.FindName("PrimaryButton")).Content as string == "下载并安装", "Verified result was discarded or the update dialog fetched again.");
+        await CaptureAsync(update, "temp/desktop-tests/startup-update-visible.png");
+        var activeField = typeof(PathEcho.MainWindow).GetField("_activeUpdateWindow", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        activeField.SetValue(hiddenOwner, update);
+        typeof(PathEcho.MainWindow).GetMethod("ShowUpdateDialog", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(hiddenOwner, new object?[] { null, new PathEcho.Core.Update.UpdateNetworkOptions() });
+        Assert(ReferenceEquals(activeField.GetValue(hiddenOwner), update), "Manual/startup checks opened competing update windows.");
+        activeField.SetValue(hiddenOwner, null);
+        update.Close(); hiddenOwner.Close();
+
+        foreach (var availability in new[] { UpdateAvailability.Latest, UpdateAvailability.ManualOnly })
+        {
+            var owner = new PathEcho.MainWindow(runtime); var presented = false;
+            await Run(owner, _ => Task.FromResult(new UpdateCheckResult(availability, "0.8.0", null)), (_, _) => presented = true);
+            Assert(!owner.IsVisible && !presented, "An up-to-date/manual-only check unexpectedly revealed a startup window.");
+            Assert(((TextBlock)owner.FindName("StartupUpdateStatusText")).Text.Contains("自动检查", StringComparison.Ordinal), "Result had no settings status.");
+            owner.Close();
+        }
+        var failedOwner = new PathEcho.MainWindow(runtime);
+        await Run(failedOwner, _ => Task.FromException<UpdateCheckResult>(new System.Net.Http.HttpRequestException("isolated failure")), (_, _) => throw new Exception("Unexpected dialog"));
+        Assert(!failedOwner.IsVisible && ((TextBlock)failedOwner.FindName("StartupUpdateStatusText")).Text.Contains("失败", StringComparison.Ordinal),
+            "A background error was hidden from settings or revealed an unrelated window.");
+        failedOwner.Close();
+        var timeoutOwner = new PathEcho.MainWindow(runtime);
+        async Task<UpdateCheckResult> Stalled(CancellationToken token) { await Task.Delay(Timeout.Infinite, token); return result; }
+        await Run(timeoutOwner, Stalled, (_, _) => throw new Exception("Timed-out check prompted"), TimeSpan.FromMilliseconds(30));
+        Assert(!timeoutOwner.IsVisible && ((TextBlock)timeoutOwner.FindName("StartupUpdateStatusText")).Text.Contains("超时", StringComparison.Ordinal),
+            "Timed-out startup check looked like no update or opened a window.");
+        timeoutOwner.Close();
+        typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime, config with { CheckForUpdates = false });
+        var disabledOwner = new PathEcho.MainWindow(runtime); var disabledCalls = 0;
+        await Run(disabledOwner, _ => { disabledCalls++; return Task.FromResult(result); }, (_, _) => throw new Exception("Disabled check prompted"));
+        Assert(disabledCalls == 0, "Disabled startup setting still issued a request."); disabledOwner.Close();
+        typeof(PathEchoRuntime).GetProperty(nameof(PathEchoRuntime.Configuration))!.SetValue(runtime, config);
+        var closingOwner = new PathEcho.MainWindow(runtime);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously); var presentedAfterClose = false;
+        async Task<UpdateCheckResult> Pending(CancellationToken token) { started.TrySetResult(); await Task.Delay(Timeout.Infinite, token); return result; }
+        var pending = Run(closingOwner, Pending, (_, _) => presentedAfterClose = true);
+        await started.Task;
+        var duplicateCalls = 0;
+        await Run(closingOwner, _ => { duplicateCalls++; return Task.FromResult(result); }, (_, _) => { });
+        Assert(duplicateCalls == 0, "Duplicate startup checks issued overlapping requests.");
+        closingOwner.Close(); await pending.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert(!presentedAfterClose, "An update prompt opened after application exit.");
+        var log = await File.ReadAllTextAsync(Path.Combine(root, "diagnostics", "diagnostics.jsonl"));
+        Assert(log.Contains("update.startup-check.completed", StringComparison.Ordinal) && log.Contains("Failed", StringComparison.Ordinal) &&
+            log.Contains("APPLICATION_EXITING", StringComparison.Ordinal), "Startup evidence disappeared when Debug was off.");
+        Results.Add(new
+        {
+            probe = "startup_update_hidden_owner",
+            originalNeverShownOwner = true,
+            availableVisible = true,
+            checkedResultReused = true,
+            latestSilent = true,
+            manualOnlyStatus = true,
+            disabledNoRequest = true,
+            failureStatusAndDefaultJournal = true,
+            closeCancels = true,
+            singleFlight = true
         });
     }
 

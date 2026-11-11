@@ -332,6 +332,7 @@
                             <TextBlock Text="网络与更新" Style="{StaticResource SettingsSectionTitle}"/>
                             <CheckBox x:Name="UpdateCheck" Content="启动后在后台检查更新" Margin="0,12,0,2"/>
                             <TextBlock x:Name="SettingsVersionText" Foreground="{StaticResource MutedBrush}" Margin="0,4,0,12"/>
+                            <TextBlock x:Name="StartupUpdateStatusText" Text="本次启动尚未自动检查更新" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12"/>
                             <TextBlock Text="GitHub 线路" Foreground="{StaticResource MutedBrush}"/>
                             <TextBlock Text="更新包和游戏规则共用；按优先级尝试，0 表示禁用。" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,4,0,0"/>
                             <StackPanel Orientation="Horizontal" Margin="0,12,0,10">

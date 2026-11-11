@@ -49,8 +49,13 @@ public static class UpdateManifestVerifier
         string expectedChannel,
         string publicKeyPem = UpdateTrust.PublicKeyPem)
     {
-        var manifest = JsonSerializer.Deserialize<UpdateManifest>(json, SerializerOptions)
+        UpdateManifest manifest;
+        try
+        {
+            manifest = JsonSerializer.Deserialize<UpdateManifest>(json, SerializerOptions)
             ?? throw new InvalidDataException("更新清单内容为空。");
+        }
+        catch (JsonException exception) { throw new InvalidDataException("更新清单 JSON 无效或尚未到齐。", exception); }
         Validate(manifest, expectedChannel);
 
         byte[] signature;
@@ -105,7 +110,7 @@ public static class UpdateManifestVerifier
         }
 
         _ = UpdateRoutePlanner.CreateRoutes(downloadUri, new UpdateNetworkOptions());
-        if (manifest.Sha256.Length != 64 || !manifest.Sha256.All(Uri.IsHexDigit))
+        if (string.IsNullOrEmpty(manifest.Sha256) || manifest.Sha256.Length != 64 || !manifest.Sha256.All(Uri.IsHexDigit))
         {
             throw new InvalidDataException("更新清单 SHA-256 无效。");
         }
@@ -115,6 +120,8 @@ public static class UpdateManifestVerifier
             throw new InvalidDataException("更新清单包大小超出限制。");
         }
 
+        if (manifest.ReleaseNotes is null || string.IsNullOrEmpty(manifest.Signature))
+            throw new InvalidDataException("更新清单缺少公告或签名字段。");
         if (Encoding.UTF8.GetByteCount(manifest.ReleaseNotes) > 128 * 1024)
         {
             throw new InvalidDataException("更新公告超出大小限制。");

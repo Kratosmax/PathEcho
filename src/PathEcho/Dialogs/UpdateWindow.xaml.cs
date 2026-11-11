@@ -10,15 +10,22 @@ public partial class UpdateWindow : Window
 {
     private readonly ApplicationUpdateService _updateService;
     private readonly bool _startImmediately;
+    private readonly UpdateCheckResult? _initialResult;
     private UpdateCheckResult? _result;
     private CancellationTokenSource? _cancellation;
     private bool _handoffStarted;
 
     public UpdateWindow(Window owner, UpdateNetworkOptions options, bool startImmediately = true)
+        : this(owner, options, startImmediately, null)
+    {
+    }
+
+    public UpdateWindow(Window owner, UpdateNetworkOptions options, bool startImmediately, UpdateCheckResult? initialResult)
     {
         Owner = owner;
         _updateService = new ApplicationUpdateService(options);
         _startImmediately = startImmediately;
+        _initialResult = initialResult;
         InitializeComponent();
         WindowBackdrop.Attach(this);
         Closing += OnClosing;
@@ -33,7 +40,11 @@ public partial class UpdateWindow : Window
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
-        if (_startImmediately)
+        if (_initialResult is not null)
+        {
+            ShowResult(_initialResult);
+        }
+        else if (_startImmediately)
         {
             await CheckAsync();
         }
@@ -73,26 +84,7 @@ public partial class UpdateWindow : Window
         try
         {
             _result = await _updateService.CheckAsync(BeginOperation());
-            VersionText.Text = $"当前版本 {_result.CurrentVersion}";
-            switch (_result.Availability)
-            {
-                case UpdateAvailability.Available:
-                    VersionText.Text += $"  →  {_result.Manifest!.Version}";
-                    NotesText.Text = _result.Manifest.ReleaseNotes;
-                    StatusText.Text = $"已验证签名 · {_result.Manifest.PackageSize / 1024d / 1024d:F1} MB · {_result.Manifest.Channel}";
-                    PrimaryButton.Content = "下载并安装";
-                    break;
-                case UpdateAvailability.Latest:
-                    NotesText.Text = "当前已经是最新版本。";
-                    StatusText.Text = "更新清单签名验证通过";
-                    PrimaryButton.Content = "重新检查";
-                    break;
-                default:
-                    NotesText.Text = "当前运行目录不具备就地更新条件，请从 GitHub Release 手动下载。";
-                    StatusText.Text = "开发构建或安装标记缺失，未修改任何文件";
-                    PrimaryButton.Content = "打开下载页";
-                    break;
-            }
+            ShowResult(_result);
         }
         catch (OperationCanceledException)
         {
@@ -109,6 +101,33 @@ public partial class UpdateWindow : Window
             PrimaryButton.IsEnabled = true;
             SecondaryButton.IsEnabled = true;
         }
+    }
+
+    private void ShowResult(UpdateCheckResult result)
+    {
+        _result = result;
+        VersionText.Text = $"当前版本 {result.CurrentVersion}";
+        switch (result.Availability)
+        {
+            case UpdateAvailability.Available:
+                VersionText.Text += $"  →  {result.Manifest!.Version}";
+                NotesText.Text = result.Manifest.ReleaseNotes;
+                StatusText.Text = $"已验证签名 · {result.Manifest.PackageSize / 1024d / 1024d:F1} MB · {result.Manifest.Channel}";
+                PrimaryButton.Content = "下载并安装";
+                break;
+            case UpdateAvailability.Latest:
+                NotesText.Text = "当前已经是最新版本。";
+                StatusText.Text = "更新清单签名验证通过";
+                PrimaryButton.Content = "重新检查";
+                break;
+            default:
+                NotesText.Text = "当前运行目录不具备就地更新条件，请从 GitHub Release 手动下载。";
+                StatusText.Text = "开发构建或安装标记缺失，未修改任何文件";
+                PrimaryButton.Content = "打开下载页";
+                break;
+        }
+        PrimaryButton.IsEnabled = true;
+        SecondaryButton.IsEnabled = true;
     }
 
     private async Task DownloadAndInstallAsync(UpdateManifest manifest)
